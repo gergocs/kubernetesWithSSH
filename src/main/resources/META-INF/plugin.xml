@@ -1,0 +1,46 @@
+<!-- Plugin Configuration File. Read more: https://plugins.jetbrains.com/docs/intellij/plugin-configuration-file.html -->
+<idea-plugin>
+    <id>com.kubernetesWithSSH</id>
+    <name>Kubernetes with SSH</name>
+    <vendor url="https://www.yourcompany.com">YourCompany</vendor>
+
+    <description><![CDATA[
+        IntelliJ IDEA plugin that provides access to remote Kubernetes clusters over SSH.<br>
+        Features:
+        <ul>
+            <li>Multiple SSH profiles: create, duplicate, rename, delete, and switch between multiple remote SSH servers seamlessly.</li>
+            <li>Configurable SSH credentials (Password & Private Key) and remote kubectl path in Settings.</li>
+            <li>Right-side Tool Window to monitor and manage Kubernetes pods.</li>
+            <li>Namespace switcher and real-time namespace explorer.</li>
+            <li>Pod statuses, readiness, container images, image IDs, restart counts, age, node, and IP inspection.</li>
+            <li>Docker Images tab displaying remote Docker/container images (Repository, Tag, Image ID, Created, Size).</li>
+            <li>Quick navigation button from Pods to Docker Images with instant search filtering.</li>
+            <li>Create new Docker image tags or change/update existing image tags directly from the UI.</li>
+            <li>Automatic 5-second background refresh for both Pods and Docker Images with selection preservation.</li>
+            <li>Delete pod, force delete pod, and delete/inspect Docker images with safety confirmations.</li>
+            <li>View Pod logs and Describe pod details directly in the IDE.</li>
+            <li>Execute an interactive terminal inside any pod with container/shell switching, live bidirectional PTY streaming, ANSI color styling, and quick command execution.</li>
+            <li>Edit Kubernetes Deployments: interactive YAML manifest editor, dry-run validation, replica scaling, container image updating, and rollout restart.</li>
+            <li>Live pod search and filtering.</li>
+        </ul>
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+
+    <resource-bundle>messages.MyMessageBundle</resource-bundle>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <projectConfigurable
+            parentId="tools"
+            instance="com.kubernetes.settings.KubernetesSshConfigurable"
+            id="com.kubernetes.settings.KubernetesSshConfigurable"
+            displayName="Kubernetes over SSH"
+            nonDefaultProject="true"/>
+
+        <toolWindow
+            id="Kubernetes SSH"
+            anchor="right"
+            factoryClass="com.kubernetes.ui.KubernetesToolWindowFactory"
+            icon="AllIcons.Toolwindows.ToolWindowPalette"/>
+    </extensions>
+</idea-plugin>
