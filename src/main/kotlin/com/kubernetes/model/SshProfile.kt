@@ -15,7 +15,9 @@ data class SshProfile(
     var kubectlPath: String = "kubectl",
     var dockerPath: String = "docker",
     var connectionTimeoutSeconds: Int = 10,
-    var defaultNamespace: String = "default"
+    var defaultNamespace: String = "default",
+    // Maps docker image names (e.g. "myapp:latest") to their build context source folders on the SSH server
+    var dockerImageSourceFolders: MutableMap<String, String> = mutableMapOf()
 ) {
     fun copyProfile(newName: String = "$name (Copy)"): SshProfile {
         return this.copy(

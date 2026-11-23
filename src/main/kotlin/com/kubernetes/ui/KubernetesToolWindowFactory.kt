@@ -20,9 +20,16 @@ class KubernetesToolWindowFactory : ToolWindowFactory {
         val podsPanel = KubernetesToolWindowPanel(project)
         Disposer.register(toolWindow.disposable, podsPanel)
         val podsTab = TabInfo(podsPanel)
-            .setText("Pods")
+            .setText("Pods & Resources")
             .setIcon(AllIcons.Nodes.Deploy)
-            .setTooltipText(HtmlChunk.text("Kubernetes Pods Explorer"))
+            .setTooltipText(HtmlChunk.text("Kubernetes Resources (Pods, Services, ConfigMaps, Deployments)"))
+
+        val tailLogsPanel = TailLogsPanel(project)
+        Disposer.register(toolWindow.disposable, tailLogsPanel)
+        val tailLogsTab = TabInfo(tailLogsPanel)
+            .setText("Tail Logs")
+            .setIcon(AllIcons.Debugger.Console)
+            .setTooltipText(HtmlChunk.text("Live Log Tailing for Single & Multiple Pods"))
 
         val dockerImagesPanel = DockerImagesPanel(project)
         Disposer.register(toolWindow.disposable, dockerImagesPanel)
@@ -39,6 +46,7 @@ class KubernetesToolWindowFactory : ToolWindowFactory {
             .setTooltipText(HtmlChunk.text("Kubectl Command Console"))
 
         tabs.addTab(podsTab)
+        tabs.addTab(tailLogsTab)
         tabs.addTab(dockerImagesTab)
         tabs.addTab(kubectlTab)
 
@@ -56,17 +64,35 @@ class KubernetesToolWindowFactory : ToolWindowFactory {
             kubectlPanel.executeCommand(command)
         }
 
+        podsPanel.onNavigateToTailLogs = { profile, namespace, pods, container, follow, tailLines, timestamps, previous ->
+            tabs.select(tailLogsTab, true)
+            tailLogsPanel.tailMultiplePods(profile, namespace, pods, container, follow, tailLines, timestamps, previous)
+        }
+
+        dockerImagesPanel.onNavigateToConsole = { command ->
+            tabs.select(kubectlTab, true)
+            kubectlPanel.executeCommand(command)
+        }
+
         podsPanel.onProfileChanged = { profile ->
             dockerImagesPanel.syncProfile(profile)
             kubectlPanel.syncProfile(profile)
+            tailLogsPanel.syncProfile(profile)
         }
         dockerImagesPanel.onProfileChanged = { profile ->
             podsPanel.syncProfile(profile)
             kubectlPanel.syncProfile(profile)
+            tailLogsPanel.syncProfile(profile)
         }
         kubectlPanel.onProfileChanged = { profile ->
             podsPanel.syncProfile(profile)
             dockerImagesPanel.syncProfile(profile)
+            tailLogsPanel.syncProfile(profile)
+        }
+        tailLogsPanel.onProfileChanged = { profile ->
+            podsPanel.syncProfile(profile)
+            dockerImagesPanel.syncProfile(profile)
+            kubectlPanel.syncProfile(profile)
         }
     }
 }

@@ -1,0 +1,30 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: batch-reporter-job
+  namespace: demo-app
+  labels:
+    app: batch-reporter
+    app.kubernetes.io/part-of: kubernetes-ssh-demo
+spec:
+  schedule: "*/2 * * * *"
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: batch-reporter
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: reporter
+              image: busybox:1.36
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  echo "Executing scheduled batch maintenance at $(date -u)...";
+                  echo "Aggregating system statistics: Done.";
+                  echo "Batch job finished successfully.";

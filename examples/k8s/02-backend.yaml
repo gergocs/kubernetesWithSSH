@@ -1,0 +1,84 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: backend-secret
+  namespace: demo-app
+  labels:
+    app: backend
+    app.kubernetes.io/part-of: kubernetes-ssh-demo
+type: Opaque
+stringData:
+  API_KEY: "secret-demo-token-12345"
+  DB_PASSWORD: "securepassword789"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend-api
+  namespace: demo-app
+  labels:
+    app: backend
+    tier: api
+    app.kubernetes.io/part-of: kubernetes-ssh-demo
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+        tier: api
+    spec:
+      containers:
+        - name: api-server
+          image: busybox:1.36
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -c
+            - |
+              echo "Starting backend API server simulation...";
+              trap 'echo "Terminating backend..."; exit 0' SIGTERM SIGINT;
+              counter=0;
+              while true; do
+                counter=$((counter + 1));
+                timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ");
+                echo "[$timestamp] [INFO] Processing request batch #$counter (Status: 200 OK, latency: 12ms)";
+                sleep 5;
+              done
+          env:
+            - name: APP_ENV
+              value: "production"
+            - name: LOG_LEVEL
+              value: "INFO"
+            - name: API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: backend-secret
+                  key: API_KEY
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-service
+  namespace: demo-app
+  labels:
+    app: backend
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8080
+      targetPort: 8080
+      protocol: TCP
+      name: http-api
+  selector:
+    app: backend

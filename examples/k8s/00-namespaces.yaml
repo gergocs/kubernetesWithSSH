@@ -1,0 +1,16 @@
+# Demo Application Namespaces
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: demo-app
+  labels:
+    environment: testing
+    app.kubernetes.io/part-of: kubernetes-ssh-demo
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: demo-monitoring
+  labels:
+    environment: testing
+    app.kubernetes.io/part-of: kubernetes-ssh-demo

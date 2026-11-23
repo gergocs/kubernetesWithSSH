@@ -17,20 +17,28 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.ComboBox
 import com.intellij.openapi.ui.Messages
 import com.intellij.ui.DocumentAdapter
+import com.intellij.ui.JBColor
 import com.intellij.ui.SearchTextField
+import com.intellij.ui.SimpleListCellRenderer
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.table.JBTable
 import com.intellij.util.ui.JBUI
+import com.kubernetes.cache.KubernetesDataCache
 import com.kubernetes.model.DockerImageInfo
 import com.kubernetes.model.SshProfile
 import com.kubernetes.settings.KubernetesSshConfigurable
 import com.kubernetes.settings.KubernetesSshSettings
 import com.kubernetes.ssh.KubernetesSshClient
+import com.kubernetes.ui.dialogs.DockerBuildDialog
 import com.kubernetes.ui.dialogs.DockerImageDetailsDialog
 import com.kubernetes.ui.dialogs.DockerTagDialog
 import java.awt.BorderLayout
+import java.awt.Color
+import java.awt.Component
+import java.awt.Dimension
 import java.awt.FlowLayout
+import java.awt.Font
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
 import java.awt.event.MouseAdapter
@@ -38,17 +46,24 @@ import java.awt.event.MouseEvent
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.atomic.AtomicBoolean
+import javax.swing.Box
+import javax.swing.BoxLayout
+import javax.swing.JLabel
+import javax.swing.JMenu
 import javax.swing.JMenuItem
 import javax.swing.JPanel
 import javax.swing.JPopupMenu
+import javax.swing.JTable
 import javax.swing.ListSelectionModel
 import javax.swing.Timer
 import javax.swing.event.DocumentEvent
+import javax.swing.table.DefaultTableCellRenderer
 import javax.swing.table.TableRowSorter
 
 class DockerImagesPanel(private val project: Project) : JPanel(BorderLayout()), Disposable {
 
     var onProfileChanged: ((SshProfile) -> Unit)? = null
+    var onNavigateToConsole: ((String) -> Unit)? = null
 
     private val tableModel = DockerImageTableModel()
     private val table = JBTable(tableModel)
@@ -56,6 +71,7 @@ class DockerImagesPanel(private val project: Project) : JPanel(BorderLayout()), 
     private val profileComboBox = ComboBox<SshProfile>()
     private val searchField = SearchTextField()
     private val statusLabel = JBLabel("Ready")
+    private val summaryLabel = JBLabel("")
 
     private var isUpdatingProfiles = false
     private val isFetching = AtomicBoolean(false)
@@ -70,35 +86,12 @@ class DockerImagesPanel(private val project: Project) : JPanel(BorderLayout()), 
     }
 
     private fun setupUI() {
-        border = JBUI.Borders.empty(4)
+        border = JBUI.Borders.empty(2)
 
-        // Top Controls Panel
-        val topPanel = JPanel(BorderLayout())
-
-        val profilePanel = JPanel(FlowLayout(FlowLayout.LEFT, 4, 2)).apply {
-            profileComboBox.toolTipText = "Select SSH Profile"
-            profileComboBox.prototypeDisplayValue = SshProfile(name = "production-server-profile")
-            profileComboBox.addActionListener {
-                if (!isUpdatingProfiles) {
-                    val selectedProf = profileComboBox.selectedItem as? SshProfile
-                    if (selectedProf != null) {
-                        val settings = KubernetesSshSettings.getInstance(project)
-                        settings.state.selectProfile(selectedProf.id)
-                        onProfileChanged?.invoke(selectedProf)
-                        loadDockerImages()
-                    }
-                }
-            }
-            add(profileComboBox)
+        // Top Controls Panel (Two-tier header for clean organization)
+        val topPanel = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
         }
-
-        // Search field listener
-        searchField.addDocumentListener(object : DocumentAdapter() {
-            override fun textChanged(e: DocumentEvent) {
-                tableModel.setFilter(searchField.text)
-                updateStatusLabel()
-            }
-        })
 
         // Action Toolbar
         val actionGroup = DefaultActionGroup().apply {
@@ -164,20 +157,84 @@ class DockerImagesPanel(private val project: Project) : JPanel(BorderLayout()), 
         )
         toolbar.targetComponent = this
 
-        val controlsAndSearch = JPanel(BorderLayout()).apply {
-            add(profilePanel, BorderLayout.WEST)
-            add(searchField, BorderLayout.CENTER)
-            add(toolbar.component, BorderLayout.EAST)
+        // Row 1: Action Toolbar on the left, Search field on the right
+        searchField.textEditor.emptyText.text = "Search images..."
+        searchField.preferredSize = Dimension(JBUI.scale(220), searchField.preferredSize.height)
+        searchField.addDocumentListener(object : DocumentAdapter() {
+            override fun textChanged(e: DocumentEvent) {
+                tableModel.setFilter(searchField.text)
+                updateStatusLabel()
+            }
+        })
+
+        val toolbarAndSearchPanel = JPanel(BorderLayout(JBUI.scale(8), 0)).apply {
+            border = JBUI.Borders.empty(2, 4)
+            add(toolbar.component, BorderLayout.WEST)
+            val searchWrapper = JPanel(FlowLayout(FlowLayout.RIGHT, 0, 0)).apply {
+                add(searchField)
+            }
+            add(searchWrapper, BorderLayout.EAST)
         }
 
-        topPanel.add(controlsAndSearch, BorderLayout.CENTER)
+        // Row 2: Profile Selector with custom icons
+        profileComboBox.toolTipText = "Select SSH Profile"
+        profileComboBox.renderer = object : SimpleListCellRenderer<SshProfile>() {
+            override fun customize(list: javax.swing.JList<out SshProfile>, value: SshProfile?, index: Int, selected: Boolean, hasFocus: Boolean) {
+                if (value != null) {
+                    text = value.name.ifBlank { value.host }
+                    icon = AllIcons.General.Web
+                }
+            }
+        }
+        profileComboBox.prototypeDisplayValue = SshProfile(name = "production-server-profile")
+        profileComboBox.addActionListener {
+            if (!isUpdatingProfiles) {
+                val selectedProf = profileComboBox.selectedItem as? SshProfile
+                if (selectedProf != null) {
+                    val settings = KubernetesSshSettings.getInstance(project)
+                    settings.state.selectProfile(selectedProf.id)
+                    onProfileChanged?.invoke(selectedProf)
+                    loadDockerImages()
+                }
+            }
+        }
+
+        val selectorsPanel = JPanel(BorderLayout()).apply {
+            border = JBUI.Borders.compound(
+                JBUI.Borders.customLine(JBColor.border(), 0, 0, 1, 0),
+                JBUI.Borders.empty(3, 4, 5, 4)
+            )
+
+            val leftSelectors = JPanel(FlowLayout(FlowLayout.LEFT, JBUI.scale(6), 0)).apply {
+                add(JBLabel("Profile:").apply { font = font.deriveFont(Font.BOLD) })
+                add(profileComboBox)
+            }
+            add(leftSelectors, BorderLayout.WEST)
+
+            val rightSummary = JPanel(FlowLayout(FlowLayout.RIGHT, JBUI.scale(6), 0)).apply {
+                summaryLabel.foreground = JBColor.GRAY
+                add(summaryLabel)
+            }
+            add(rightSummary, BorderLayout.EAST)
+        }
+
+        topPanel.add(toolbarAndSearchPanel)
+        topPanel.add(selectorsPanel)
         add(topPanel, BorderLayout.NORTH)
 
         // Table Setup
-        table.setSelectionMode(ListSelectionModel.SINGLE_SELECTION)
-        table.rowSorter = TableRowSorter(tableModel)
-        table.fillsViewportHeight = true
-        table.autoResizeMode = JBTable.AUTO_RESIZE_ALL_COLUMNS
+        table.apply {
+            setSelectionMode(ListSelectionModel.SINGLE_SELECTION)
+            rowSorter = TableRowSorter(tableModel)
+            fillsViewportHeight = true
+            autoResizeMode = JBTable.AUTO_RESIZE_ALL_COLUMNS
+            rowHeight = JBUI.scale(24)
+            setShowGrid(false)
+            setShowHorizontalLines(true)
+            gridColor = JBColor(Color(235, 235, 235), Color(50, 50, 50))
+            emptyText.text = "No Docker images found."
+            setDefaultRenderer(Any::class.java, DockerImageCellRenderer())
+        }
 
         table.addMouseListener(object : MouseAdapter() {
             override fun mouseClicked(e: MouseEvent) {
@@ -200,64 +257,137 @@ class DockerImagesPanel(private val project: Project) : JPanel(BorderLayout()), 
                 if (row >= 0 && !table.isRowSelected(row)) {
                     table.setRowSelectionInterval(row, row)
                 }
-                if (table.selectedRow < 0) return
+                val img = getSelectedImage() ?: return
 
                 val menu = JPopupMenu()
-                menu.add(JMenuItem("Create Tag...").apply {
+
+                // 1. Primary Inspect & Tag Actions
+                menu.add(JMenuItem("Inspect Image Details...").apply {
+                    icon = AllIcons.Actions.Show
+                    font = font.deriveFont(Font.BOLD)
+                    addActionListener { inspectSelectedImage() }
+                })
+                menu.add(JMenuItem("Create New Tag...").apply {
                     icon = AllIcons.General.Add
                     addActionListener { createTagSelectedImage() }
                 })
-                menu.add(JMenuItem("Change Tag...").apply {
+                menu.add(JMenuItem("Change / Re-tag Image...").apply {
                     icon = AllIcons.Actions.Edit
                     addActionListener { changeTagSelectedImage() }
                 })
+
                 menu.addSeparator()
-                menu.add(JMenuItem("Inspect Image").apply {
-                    icon = AllIcons.Actions.Show
-                    addActionListener { inspectSelectedImage() }
+
+                // Build from source folder action
+                menu.add(JMenuItem("Build from Source...").apply {
+                    icon = AllIcons.General.Gear
+                    font = font.deriveFont(Font.BOLD)
+                    addActionListener { buildImageFromSource(img) }
                 })
-                menu.add(JMenuItem("Delete Image (rmi)").apply {
+
+                val fullImageName = if (img.tag.isNotBlank() && img.tag != "<none>") "${img.repository}:${img.tag}" else img.repository
+
+                menu.add(JMenuItem("Open in Kubectl / Shell Console").apply {
+                    icon = AllIcons.Nodes.Console
+                    addActionListener {
+                        onNavigateToConsole?.invoke("docker inspect ${img.imageId.ifBlank { fullImageName }}")
+                    }
+                })
+
+                menu.addSeparator()
+
+                // 2. Copy Submenu
+                val copyMenu = JMenu("Copy").apply {
+                    icon = AllIcons.Actions.Copy
+                }
+                copyMenu.add(JMenuItem("Copy Full Name ($fullImageName)").apply {
+                    icon = AllIcons.Actions.Copy
+                    addActionListener {
+                        Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(fullImageName), null)
+                        statusLabel.text = "Copied full image name '$fullImageName' to clipboard."
+                    }
+                })
+                copyMenu.add(JMenuItem("Copy Image ID (${img.imageId})").apply {
+                    icon = AllIcons.Actions.Copy
+                    addActionListener {
+                        Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(img.imageId), null)
+                        statusLabel.text = "Copied image ID '${img.imageId}' to clipboard."
+                    }
+                })
+                copyMenu.add(JMenuItem("Copy Repository (${img.repository})").apply {
+                    icon = AllIcons.Actions.Copy
+                    addActionListener {
+                        Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(img.repository), null)
+                        statusLabel.text = "Copied repository '${img.repository}' to clipboard."
+                    }
+                })
+                copyMenu.add(JMenuItem("Copy Tag (${img.tag})").apply {
+                    icon = AllIcons.Actions.Copy
+                    addActionListener {
+                        Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(img.tag), null)
+                        statusLabel.text = "Copied tag '${img.tag}' to clipboard."
+                    }
+                })
+                copyMenu.addSeparator()
+                copyMenu.add(JMenuItem("Copy 'docker run' Command").apply {
+                    icon = AllIcons.Actions.Copy
+                    addActionListener {
+                        val containerName = img.repository.substringAfterLast("/").substringBefore(":")
+                        val cmd = "docker run -d --name $containerName $fullImageName"
+                        Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(cmd), null)
+                        statusLabel.text = "Copied docker run command to clipboard."
+                    }
+                })
+                copyMenu.add(JMenuItem("Copy 'docker pull' Command").apply {
+                    icon = AllIcons.Actions.Copy
+                    addActionListener {
+                        val cmd = "docker pull $fullImageName"
+                        Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(cmd), null)
+                        statusLabel.text = "Copied docker pull command to clipboard."
+                    }
+                })
+                copyMenu.add(JMenuItem("Copy 'docker push' Command").apply {
+                    icon = AllIcons.Actions.Copy
+                    addActionListener {
+                        val cmd = "docker push $fullImageName"
+                        Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(cmd), null)
+                        statusLabel.text = "Copied docker push command to clipboard."
+                    }
+                })
+                copyMenu.add(JMenuItem("Copy 'docker inspect' Command").apply {
+                    icon = AllIcons.Actions.Copy
+                    addActionListener {
+                        val cmd = "docker inspect ${img.imageId.ifBlank { fullImageName }}"
+                        Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(cmd), null)
+                        statusLabel.text = "Copied docker inspect command to clipboard."
+                    }
+                })
+                copyMenu.add(JMenuItem("Copy 'docker rmi' Command").apply {
+                    icon = AllIcons.Actions.Copy
+                    addActionListener {
+                        val cmd = "docker rmi $fullImageName"
+                        Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(cmd), null)
+                        statusLabel.text = "Copied docker rmi command to clipboard."
+                    }
+                })
+                menu.add(copyMenu)
+
+                menu.addSeparator()
+
+                // 3. Delete Submenu
+                val deleteMenu = JMenu("Delete Image").apply {
+                    icon = AllIcons.Actions.Cancel
+                }
+                deleteMenu.add(JMenuItem("Delete Image (docker rmi)...").apply {
                     icon = AllIcons.Actions.Cancel
                     addActionListener { deleteSelectedImage(force = false) }
                 })
-                menu.add(JMenuItem("Force Delete Image (rmi -f)").apply {
-                    icon = AllIcons.Actions.Cancel
+                deleteMenu.add(JMenuItem("Force Delete Image (docker rmi -f)...").apply {
+                    icon = AllIcons.Actions.ForceRefresh
                     addActionListener { deleteSelectedImage(force = true) }
                 })
-                menu.addSeparator()
-                menu.add(JMenuItem("Copy Full Name (Repository:Tag)").apply {
-                    icon = AllIcons.Actions.Copy
-                    addActionListener {
-                        getSelectedImage()?.let { img ->
-                            val full = if (img.tag.isNotBlank() && img.tag != "<none>") "${img.repository}:${img.tag}" else img.repository
-                            Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(full), null)
-                        }
-                    }
-                })
-                menu.add(JMenuItem("Copy Image ID").apply {
-                    icon = AllIcons.Actions.Copy
-                    addActionListener {
-                        getSelectedImage()?.let { img ->
-                            Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(img.imageId), null)
-                        }
-                    }
-                })
-                menu.add(JMenuItem("Copy Repository").apply {
-                    icon = AllIcons.Actions.Copy
-                    addActionListener {
-                        getSelectedImage()?.let { img ->
-                            Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(img.repository), null)
-                        }
-                    }
-                })
-                menu.add(JMenuItem("Copy Tag").apply {
-                    icon = AllIcons.Actions.Copy
-                    addActionListener {
-                        getSelectedImage()?.let { img ->
-                            Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(img.tag), null)
-                        }
-                    }
-                })
+                menu.add(deleteMenu)
+
                 menu.show(e.component, e.x, e.y)
             }
         })
@@ -267,7 +397,10 @@ class DockerImagesPanel(private val project: Project) : JPanel(BorderLayout()), 
 
         // Bottom Status Bar
         val bottomPanel = JPanel(BorderLayout()).apply {
-            border = JBUI.Borders.empty(4, 6)
+            border = JBUI.Borders.compound(
+                JBUI.Borders.customLine(JBColor.border(), 1, 0, 0, 0),
+                JBUI.Borders.empty(4, 8)
+            )
             add(statusLabel, BorderLayout.WEST)
         }
         add(bottomPanel, BorderLayout.SOUTH)
@@ -323,6 +456,7 @@ class DockerImagesPanel(private val project: Project) : JPanel(BorderLayout()), 
             try {
                 val client = KubernetesSshClient(profile)
                 val images = client.getDockerImages()
+                KubernetesDataCache.putDockerImages(profile.id, images)
                 ApplicationManager.getApplication().invokeLater {
                     if (!isDisposed && !project.isDisposed) {
                         val selectedImageId = getSelectedImage()?.imageId
@@ -377,6 +511,21 @@ class DockerImagesPanel(private val project: Project) : JPanel(BorderLayout()), 
             return
         }
 
+        // 1. Instant cache rendering
+        val cached = KubernetesDataCache.getDockerImages(profile.id)
+        if (cached != null) {
+            val selectedImageId = getSelectedImage()?.imageId
+            val selectedRepoTag = getSelectedImage()?.let { "${it.repository}:${it.tag}" }
+            tableModel.setImages(cached)
+            restoreImageSelection(selectedImageId, selectedRepoTag)
+            updateStatusLabel()
+
+            // Background revalidation
+            autoRefreshDockerImages()
+            return
+        }
+
+        // 2. Background load if not cached
         statusLabel.text = "[${profile.name}] Loading docker images from ${profile.host}..."
 
         ProgressManager.getInstance().run(object : Task.Backgroundable(project, "Loading Docker Images", false) {
@@ -388,6 +537,7 @@ class DockerImagesPanel(private val project: Project) : JPanel(BorderLayout()), 
                 val client = KubernetesSshClient(profile)
                 try {
                     images = client.getDockerImages()
+                    KubernetesDataCache.putDockerImages(profile.id, images)
                 } catch (e: Exception) {
                     errorMessage = e.message ?: "Unknown error"
                 }
@@ -416,6 +566,7 @@ class DockerImagesPanel(private val project: Project) : JPanel(BorderLayout()), 
         val filterInfo = if (filter.isNotBlank()) " (filtered from $total)" else ""
         val time = LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss"))
         statusLabel.text = "Profile: $profileName | $count images$filterInfo | Last updated: $time"
+        summaryLabel.text = "$count images$filterInfo"
     }
 
     private fun createTagSelectedImage() {
@@ -446,6 +597,7 @@ class DockerImagesPanel(private val project: Project) : JPanel(BorderLayout()), 
             override fun onSuccess() {
                 if (isSuccess) {
                     Messages.showInfoMessage(project, "Successfully tagged '$source' as '$target'", "Docker Tag Created")
+                    KubernetesDataCache.invalidateDockerImages(profile.id)
                     loadDockerImages()
                 } else {
                     Messages.showErrorDialog(project, "Failed to create tag '$target':\n$errorOutput", "Docker Tag Failed")
@@ -489,6 +641,7 @@ class DockerImagesPanel(private val project: Project) : JPanel(BorderLayout()), 
                         "Successfully tagged as '$target'."
                     }
                     Messages.showInfoMessage(project, msg, "Docker Tag Changed")
+                    KubernetesDataCache.invalidateDockerImages(profile.id)
                     loadDockerImages()
                 } else {
                     Messages.showErrorDialog(project, "Failed to change tag to '$target':\n$errorOutput", "Change Tag Failed")
@@ -529,6 +682,74 @@ class DockerImagesPanel(private val project: Project) : JPanel(BorderLayout()), 
                     contentText = inspectOutput.ifBlank { "No inspect details available." }
                 )
                 dialog.show()
+            }
+        })
+    }
+
+    private fun buildImageFromSource(image: DockerImageInfo) {
+        val profile = KubernetesSshSettings.getInstance(project).state.getActiveProfile()
+        if (profile.host.isBlank()) {
+            Messages.showWarningDialog(project, "SSH not configured. Please configure the SSH profile first.", "SSH Not Configured")
+            return
+        }
+
+        // Get the image key for looking up stored source folder
+        val imageKey = if (image.repository.isNotBlank() && image.tag.isNotBlank() && image.tag != "<none>") {
+            "${image.repository}:${image.tag}"
+        } else {
+            image.repository
+        }
+
+        // Check if there's already a stored source folder for this image
+        val existingSourceFolder = profile.dockerImageSourceFolders[imageKey]
+
+        val dialog = DockerBuildDialog(project, image, existingSourceFolder)
+        if (!dialog.showAndGet()) return
+
+        val sourceFolder = dialog.getSourceFolder()
+        val targetTag = dialog.getTargetTag()
+        val dockerfilePath = dialog.getDockerfilePath()
+        val targetImageName = dialog.getTargetImageName()
+
+        // Save the source folder mapping for future use
+        profile.dockerImageSourceFolders[imageKey] = sourceFolder
+        KubernetesSshSettings.getInstance(project).state.selectProfile(profile.id)
+
+        val client = KubernetesSshClient(profile)
+
+        ProgressManager.getInstance().run(object : Task.Backgroundable(project, "Building Docker Image", false) {
+            private var buildSuccess = false
+            private var errorOutput = ""
+
+            override fun run(indicator: ProgressIndicator) {
+                indicator.text = "Building docker image from '$sourceFolder' on ${profile.host}..."
+                try {
+                    val result = client.buildDockerImage(sourceFolder, image.repository.ifBlank { "untagged-image" }, targetTag, dockerfilePath)
+                    buildSuccess = result.isSuccess
+                    errorOutput = result.error.ifBlank { result.output }
+                } catch (e: Exception) {
+                    buildSuccess = false
+                    errorOutput = e.message ?: "Build failed"
+                }
+            }
+
+            override fun onSuccess() {
+                if (buildSuccess) {
+                    Messages.showInfoMessage(
+                        project,
+                        "Successfully built docker image '$targetImageName' from '$sourceFolder'.",
+                        "Docker Build Successful"
+                    )
+                    statusLabel.text = "Built image '$targetImageName' from '$sourceFolder'."
+                    KubernetesDataCache.invalidateDockerImages(profile.id)
+                    loadDockerImages()
+                } else {
+                    Messages.showErrorDialog(
+                        project,
+                        "Failed to build docker image:\n$errorOutput",
+                        "Docker Build Failed"
+                    )
+                }
             }
         })
     }
@@ -576,6 +797,7 @@ class DockerImagesPanel(private val project: Project) : JPanel(BorderLayout()), 
             override fun onSuccess() {
                 if (deleteSuccess) {
                     statusLabel.text = "Image '$targetDisplay' deleted successfully."
+                    KubernetesDataCache.invalidateDockerImages(profile.id)
                     loadDockerImages()
                 } else {
                     Messages.showErrorDialog(
@@ -592,5 +814,43 @@ class DockerImagesPanel(private val project: Project) : JPanel(BorderLayout()), 
         isDisposed = true
         refreshTimer?.stop()
         refreshTimer = null
+    }
+}
+
+class DockerImageCellRenderer : DefaultTableCellRenderer() {
+    override fun getTableCellRendererComponent(
+        table: JTable?,
+        value: Any?,
+        isSelected: Boolean,
+        hasFocus: Boolean,
+        row: Int,
+        column: Int
+    ): Component {
+        val label = super.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, column) as JLabel
+        label.border = JBUI.Borders.empty(3, 8)
+        val text = value?.toString() ?: ""
+        label.text = text
+        label.toolTipText = text.ifBlank { null }
+        label.icon = null
+
+        val columnName = if (table != null && column < table.columnCount) table.getColumnName(column) else ""
+
+        if (column == 0) {
+            label.icon = AllIcons.Nodes.Artifact
+            if (!isSelected) {
+                label.font = label.font.deriveFont(Font.BOLD)
+            }
+        } else if (columnName.equals("Tag", ignoreCase = true)) {
+            if (text == "<none>") {
+                if (!isSelected) label.foreground = JBColor.GRAY
+                label.font = label.font.deriveFont(Font.ITALIC)
+            } else {
+                label.font = label.font.deriveFont(Font.BOLD)
+            }
+        } else if (columnName.equals("Image ID", ignoreCase = true)) {
+            label.font = Font(Font.MONOSPACED, Font.PLAIN, label.font.size)
+        }
+
+        return label
     }
 }

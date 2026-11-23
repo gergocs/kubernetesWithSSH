@@ -5,10 +5,20 @@ import com.jcraft.jsch.JSch
 import com.jcraft.jsch.Session
 import com.kubernetes.model.AuthType
 import com.kubernetes.model.CommandResult
+import com.kubernetes.model.ConfigMapInfo
 import com.kubernetes.model.ConnectionTestResult
+import com.kubernetes.model.CronJobInfo
+import com.kubernetes.model.DaemonSetInfo
 import com.kubernetes.model.DeploymentInfo
 import com.kubernetes.model.DockerImageInfo
+import com.kubernetes.model.EventInfo
+import com.kubernetes.model.IngressInfo
+import com.kubernetes.model.JobInfo
+import com.kubernetes.model.PersistentVolumeClaimInfo
 import com.kubernetes.model.PodInfo
+import com.kubernetes.model.SecretInfo
+import com.kubernetes.model.ServiceInfo
+import com.kubernetes.model.StatefulSetInfo
 import com.kubernetes.model.SshProfile
 import com.kubernetes.settings.KubernetesSshSettingsState
 import java.io.ByteArrayInputStream
@@ -205,6 +215,378 @@ class KubernetesSshClient(private val settings: SshProfile) {
         }
     }
 
+    fun getServices(namespace: String): List<ServiceInfo> {
+        val targetNs = if (namespace.isBlank()) settings.defaultNamespace.ifBlank { "default" } else namespace
+        return withSession { session ->
+            val result = executeCommand(session, "${settings.kubectlPath} get services -n $targetNs -o json")
+            if (result.isSuccess && result.output.isNotBlank()) {
+                val trimmed = result.output.trim()
+                if (trimmed.startsWith("{")) {
+                    return@withSession KubernetesParser.parseServicesJson(trimmed, targetNs)
+                }
+            }
+            // Fallback to wide table
+            val fallback = executeCommand(session, "${settings.kubectlPath} get services -n $targetNs -o wide")
+            if (fallback.isSuccess && fallback.output.isNotBlank()) {
+                val parsed = KubernetesParser.parseServicesTable(fallback.output, targetNs)
+                if (parsed.isNotEmpty()) return@withSession parsed
+            }
+            val tableFallback = executeCommand(session, "${settings.kubectlPath} get services -n $targetNs")
+            if (tableFallback.isSuccess && tableFallback.output.isNotBlank()) {
+                KubernetesParser.parseServicesTable(tableFallback.output, targetNs)
+            } else {
+                emptyList()
+            }
+        }
+    }
+
+    fun deleteService(namespace: String, serviceName: String, force: Boolean = false): CommandResult {
+        val targetNs = if (namespace.isBlank()) settings.defaultNamespace.ifBlank { "default" } else namespace
+        val forceFlag = if (force) " --force --grace-period=0" else ""
+        val command = "${settings.kubectlPath} delete service $serviceName -n $targetNs$forceFlag"
+        return withSession { session ->
+            executeCommand(session, command)
+        }
+    }
+
+    fun describeService(namespace: String, serviceName: String): CommandResult {
+        val targetNs = if (namespace.isBlank()) settings.defaultNamespace.ifBlank { "default" } else namespace
+        val command = "${settings.kubectlPath} describe service $serviceName -n $targetNs"
+        return withSession { session ->
+            executeCommand(session, command)
+        }
+    }
+
+    fun getServiceYaml(namespace: String, serviceName: String): CommandResult {
+        val targetNs = if (namespace.isBlank()) settings.defaultNamespace.ifBlank { "default" } else namespace
+        val command = "${settings.kubectlPath} get service $serviceName -n $targetNs -o yaml"
+        return withSession { session ->
+            executeCommand(session, command)
+        }
+    }
+
+    fun getConfigMaps(namespace: String): List<ConfigMapInfo> {
+        val targetNs = if (namespace.isBlank()) settings.defaultNamespace.ifBlank { "default" } else namespace
+        return withSession { session ->
+            val result = executeCommand(session, "${settings.kubectlPath} get configmaps -n $targetNs -o json")
+            if (result.isSuccess && result.output.isNotBlank()) {
+                val trimmed = result.output.trim()
+                if (trimmed.startsWith("{")) {
+                    return@withSession KubernetesParser.parseConfigMapsJson(trimmed, targetNs)
+                }
+            }
+            val fallback = executeCommand(session, "${settings.kubectlPath} get configmaps -n $targetNs")
+            if (fallback.isSuccess && fallback.output.isNotBlank()) {
+                KubernetesParser.parseConfigMapsTable(fallback.output, targetNs)
+            } else {
+                emptyList()
+            }
+        }
+    }
+
+    fun deleteConfigMap(namespace: String, configMapName: String, force: Boolean = false): CommandResult {
+        val targetNs = if (namespace.isBlank()) settings.defaultNamespace.ifBlank { "default" } else namespace
+        val forceFlag = if (force) " --force --grace-period=0" else ""
+        val command = "${settings.kubectlPath} delete configmap $configMapName -n $targetNs$forceFlag"
+        return withSession { session ->
+            executeCommand(session, command)
+        }
+    }
+
+    fun describeConfigMap(namespace: String, configMapName: String): CommandResult {
+        val targetNs = if (namespace.isBlank()) settings.defaultNamespace.ifBlank { "default" } else namespace
+        val command = "${settings.kubectlPath} describe configmap $configMapName -n $targetNs"
+        return withSession { session ->
+            executeCommand(session, command)
+        }
+    }
+
+    fun getConfigMapYaml(namespace: String, configMapName: String): CommandResult {
+        val targetNs = if (namespace.isBlank()) settings.defaultNamespace.ifBlank { "default" } else namespace
+        val command = "${settings.kubectlPath} get configmap $configMapName -n $targetNs -o yaml"
+        return withSession { session ->
+            executeCommand(session, command)
+        }
+    }
+
+    // MARK: - Secrets
+    fun getSecrets(namespace: String): List<SecretInfo> {
+        val targetNs = if (namespace.isBlank()) settings.defaultNamespace.ifBlank { "default" } else namespace
+        return withSession { session ->
+            val result = executeCommand(session, "${settings.kubectlPath} get secrets -n $targetNs -o json")
+            if (result.isSuccess && result.output.isNotBlank()) {
+                val trimmed = result.output.trim()
+                if (trimmed.startsWith("{")) {
+                    return@withSession KubernetesParser.parseSecretsJson(trimmed, targetNs)
+                }
+            }
+            val fallback = executeCommand(session, "${settings.kubectlPath} get secrets -n $targetNs")
+            if (fallback.isSuccess && fallback.output.isNotBlank()) {
+                KubernetesParser.parseSecretsTable(fallback.output, targetNs)
+            } else {
+                emptyList()
+            }
+        }
+    }
+
+    fun getSecretYaml(namespace: String, secretName: String): CommandResult {
+        val targetNs = if (namespace.isBlank()) settings.defaultNamespace.ifBlank { "default" } else namespace
+        val command = "${settings.kubectlPath} get secret $secretName -n $targetNs -o yaml"
+        return withSession { session ->
+            executeCommand(session, command)
+        }
+    }
+
+    fun deleteSecret(namespace: String, secretName: String, force: Boolean = false): CommandResult {
+        val targetNs = if (namespace.isBlank()) settings.defaultNamespace.ifBlank { "default" } else namespace
+        val forceFlag = if (force) " --force --grace-period=0" else ""
+        val command = "${settings.kubectlPath} delete secret $secretName -n $targetNs$forceFlag"
+        return withSession { session ->
+            executeCommand(session, command)
+        }
+    }
+
+    fun describeSecret(namespace: String, secretName: String): CommandResult {
+        val targetNs = if (namespace.isBlank()) settings.defaultNamespace.ifBlank { "default" } else namespace
+        val command = "${settings.kubectlPath} describe secret $secretName -n $targetNs"
+        return withSession { session ->
+            executeCommand(session, command)
+        }
+    }
+
+    // MARK: - Ingresses
+    fun getIngresses(namespace: String): List<IngressInfo> {
+        val targetNs = if (namespace.isBlank()) settings.defaultNamespace.ifBlank { "default" } else namespace
+        return withSession { session ->
+            val result = executeCommand(session, "${settings.kubectlPath} get ingresses -n $targetNs -o json")
+            if (result.isSuccess && result.output.isNotBlank()) {
+                val trimmed = result.output.trim()
+                if (trimmed.startsWith("{")) {
+                    return@withSession KubernetesParser.parseIngressesJson(trimmed, targetNs)
+                }
+            }
+            val fallback = executeCommand(session, "${settings.kubectlPath} get ingresses -n $targetNs")
+            if (fallback.isSuccess && fallback.output.isNotBlank()) {
+                KubernetesParser.parseIngressesTable(fallback.output, targetNs)
+            } else {
+                emptyList()
+            }
+        }
+    }
+
+    fun getIngressYaml(namespace: String, ingressName: String): CommandResult {
+        val targetNs = if (namespace.isBlank()) settings.defaultNamespace.ifBlank { "default" } else namespace
+        val command = "${settings.kubectlPath} get ingress $ingressName -n $targetNs -o yaml"
+        return withSession { session ->
+            executeCommand(session, command)
+        }
+    }
+
+    fun deleteIngress(namespace: String, ingressName: String, force: Boolean = false): CommandResult {
+        val targetNs = if (namespace.isBlank()) settings.defaultNamespace.ifBlank { "default" } else namespace
+        val forceFlag = if (force) " --force --grace-period=0" else ""
+        val command = "${settings.kubectlPath} delete ingress $ingressName -n $targetNs$forceFlag"
+        return withSession { session ->
+            executeCommand(session, command)
+        }
+    }
+
+    fun describeIngress(namespace: String, ingressName: String): CommandResult {
+        val targetNs = if (namespace.isBlank()) settings.defaultNamespace.ifBlank { "default" } else namespace
+        val command = "${settings.kubectlPath} describe ingress $ingressName -n $targetNs"
+        return withSession { session ->
+            executeCommand(session, command)
+        }
+    }
+
+    // MARK: - Jobs
+    fun getJobs(namespace: String): List<JobInfo> {
+        val targetNs = if (namespace.isBlank()) settings.defaultNamespace.ifBlank { "default" } else namespace
+        return withSession { session ->
+            val result = executeCommand(session, "${settings.kubectlPath} get jobs -n $targetNs -o json")
+            if (result.isSuccess && result.output.isNotBlank()) {
+                val trimmed = result.output.trim()
+                if (trimmed.startsWith("{")) {
+                    return@withSession KubernetesParser.parseJobsJson(trimmed, targetNs)
+                }
+            }
+            val fallback = executeCommand(session, "${settings.kubectlPath} get jobs -n $targetNs")
+            if (fallback.isSuccess && fallback.output.isNotBlank()) {
+                KubernetesParser.parseJobsTable(fallback.output, targetNs)
+            } else {
+                emptyList()
+            }
+        }
+    }
+
+    // MARK: - CronJobs
+    fun getCronJobs(namespace: String): List<CronJobInfo> {
+        val targetNs = if (namespace.isBlank()) settings.defaultNamespace.ifBlank { "default" } else namespace
+        return withSession { session ->
+            val result = executeCommand(session, "${settings.kubectlPath} get cronjobs -n $targetNs -o json")
+            if (result.isSuccess && result.output.isNotBlank()) {
+                val trimmed = result.output.trim()
+                if (trimmed.startsWith("{")) {
+                    return@withSession KubernetesParser.parseCronJobsJson(trimmed, targetNs)
+                }
+            }
+            val fallback = executeCommand(session, "${settings.kubectlPath} get cronjobs -n $targetNs")
+            if (fallback.isSuccess && fallback.output.isNotBlank()) {
+                KubernetesParser.parseCronJobsTable(fallback.output, targetNs)
+            } else {
+                emptyList()
+            }
+        }
+    }
+
+    fun triggerCronJob(namespace: String, cronJobName: String, jobName: String = ""): CommandResult {
+        val targetNs = if (namespace.isBlank()) settings.defaultNamespace.ifBlank { "default" } else namespace
+        val targetJobName = if (jobName.isNotBlank()) jobName else "$cronJobName-manual-${System.currentTimeMillis() / 1000}"
+        val command = "${settings.kubectlPath} create job $targetJobName --from=cronjob/$cronJobName -n $targetNs"
+        return withSession { session ->
+            executeCommand(session, command)
+        }
+    }
+
+    // MARK: - Events
+    fun getEvents(namespace: String): List<EventInfo> {
+        val targetNs = if (namespace.isBlank()) settings.defaultNamespace.ifBlank { "default" } else namespace
+        return withSession { session ->
+            val result = executeCommand(session, "${settings.kubectlPath} get events -n $targetNs -o json")
+            if (result.isSuccess && result.output.isNotBlank()) {
+                val trimmed = result.output.trim()
+                if (trimmed.startsWith("{")) {
+                    return@withSession KubernetesParser.parseEventsJson(trimmed, targetNs)
+                }
+            }
+            val fallback = executeCommand(session, "${settings.kubectlPath} get events -n $targetNs")
+            if (fallback.isSuccess && fallback.output.isNotBlank()) {
+                KubernetesParser.parseEventsTable(fallback.output, targetNs)
+            } else {
+                emptyList()
+            }
+        }
+    }
+
+    // MARK: - StatefulSets
+    fun getStatefulSets(namespace: String): List<StatefulSetInfo> {
+        val targetNs = if (namespace.isBlank()) settings.defaultNamespace.ifBlank { "default" } else namespace
+        return withSession { session ->
+            val result = executeCommand(session, "${settings.kubectlPath} get statefulsets -n $targetNs -o json")
+            if (result.isSuccess && result.output.isNotBlank()) {
+                val trimmed = result.output.trim()
+                if (trimmed.startsWith("{")) {
+                    return@withSession KubernetesParser.parseStatefulSetsJson(trimmed, targetNs)
+                }
+            }
+            val fallback = executeCommand(session, "${settings.kubectlPath} get statefulsets -n $targetNs")
+            if (fallback.isSuccess && fallback.output.isNotBlank()) {
+                KubernetesParser.parseStatefulSetsTable(fallback.output, targetNs)
+            } else {
+                emptyList()
+            }
+        }
+    }
+
+    fun scaleStatefulSet(namespace: String, statefulSetName: String, replicas: Int): CommandResult {
+        val targetNs = if (namespace.isBlank()) settings.defaultNamespace.ifBlank { "default" } else namespace
+        val command = "${settings.kubectlPath} scale statefulset $statefulSetName --replicas=$replicas -n $targetNs"
+        return withSession { session ->
+            executeCommand(session, command)
+        }
+    }
+
+    fun restartStatefulSetRollout(namespace: String, statefulSetName: String): CommandResult {
+        val targetNs = if (namespace.isBlank()) settings.defaultNamespace.ifBlank { "default" } else namespace
+        val command = "${settings.kubectlPath} rollout restart statefulset/$statefulSetName -n $targetNs"
+        return withSession { session ->
+            executeCommand(session, command)
+        }
+    }
+
+    // MARK: - DaemonSets
+    fun getDaemonSets(namespace: String): List<DaemonSetInfo> {
+        val targetNs = if (namespace.isBlank()) settings.defaultNamespace.ifBlank { "default" } else namespace
+        return withSession { session ->
+            val result = executeCommand(session, "${settings.kubectlPath} get daemonsets -n $targetNs -o json")
+            if (result.isSuccess && result.output.isNotBlank()) {
+                val trimmed = result.output.trim()
+                if (trimmed.startsWith("{")) {
+                    return@withSession KubernetesParser.parseDaemonSetsJson(trimmed, targetNs)
+                }
+            }
+            val fallback = executeCommand(session, "${settings.kubectlPath} get daemonsets -n $targetNs")
+            if (fallback.isSuccess && fallback.output.isNotBlank()) {
+                KubernetesParser.parseDaemonSetsTable(fallback.output, targetNs)
+            } else {
+                emptyList()
+            }
+        }
+    }
+
+    fun restartDaemonSetRollout(namespace: String, daemonSetName: String): CommandResult {
+        val targetNs = if (namespace.isBlank()) settings.defaultNamespace.ifBlank { "default" } else namespace
+        val command = "${settings.kubectlPath} rollout restart daemonset/$daemonSetName -n $targetNs"
+        return withSession { session ->
+            executeCommand(session, command)
+        }
+    }
+
+    // MARK: - PersistentVolumeClaims
+    fun getPersistentVolumeClaims(namespace: String): List<PersistentVolumeClaimInfo> {
+        val targetNs = if (namespace.isBlank()) settings.defaultNamespace.ifBlank { "default" } else namespace
+        return withSession { session ->
+            val result = executeCommand(session, "${settings.kubectlPath} get pvc -n $targetNs -o json")
+            if (result.isSuccess && result.output.isNotBlank()) {
+                val trimmed = result.output.trim()
+                if (trimmed.startsWith("{")) {
+                    return@withSession KubernetesParser.parsePersistentVolumeClaimsJson(trimmed, targetNs)
+                }
+            }
+            val fallback = executeCommand(session, "${settings.kubectlPath} get pvc -n $targetNs")
+            if (fallback.isSuccess && fallback.output.isNotBlank()) {
+                KubernetesParser.parsePersistentVolumeClaimsTable(fallback.output, targetNs)
+            } else {
+                emptyList()
+            }
+        }
+    }
+
+    fun getResourceYaml(resourceType: String, namespace: String, name: String): CommandResult {
+        val targetNs = if (namespace.isBlank()) settings.defaultNamespace.ifBlank { "default" } else namespace
+        val command = "${settings.kubectlPath} get $resourceType $name -n $targetNs -o yaml"
+        return withSession { session ->
+            executeCommand(session, command)
+        }
+    }
+
+    fun deleteResource(resourceType: String, namespace: String, name: String, force: Boolean = false): CommandResult {
+        val targetNs = if (namespace.isBlank()) settings.defaultNamespace.ifBlank { "default" } else namespace
+        val forceFlag = if (force) " --force --grace-period=0" else ""
+        val command = "${settings.kubectlPath} delete $resourceType $name -n $targetNs$forceFlag"
+        return withSession { session ->
+            executeCommand(session, command)
+        }
+    }
+
+    fun describeResource(resourceType: String, namespace: String, name: String): CommandResult {
+        val targetNs = if (namespace.isBlank()) settings.defaultNamespace.ifBlank { "default" } else namespace
+        val command = "${settings.kubectlPath} describe $resourceType $name -n $targetNs"
+        return withSession { session ->
+            executeCommand(session, command)
+        }
+    }
+
+    fun applyResourceYaml(namespace: String, yamlContent: String, dryRun: Boolean = false): CommandResult {
+        val targetNs = if (namespace.isBlank()) settings.defaultNamespace.ifBlank { "default" } else namespace
+        val dryRunFlag = if (dryRun) " --dry-run=server" else ""
+        val command = "${settings.kubectlPath} apply -f - -n $targetNs$dryRunFlag"
+        val inputBytes = yamlContent.toByteArray(Charsets.UTF_8)
+        return withSession { session ->
+            executeCommand(session, command, inputBytes)
+        }
+    }
+
     fun resolveKubectlCommand(rawCommand: String, namespace: String? = null, autoNamespace: Boolean = false): String {
         val trimmed = rawCommand.trim()
         if (trimmed.isBlank()) return settings.kubectlPath
@@ -360,6 +742,19 @@ class KubernetesSshClient(private val settings: SshProfile) {
         }
     }
 
+    fun buildDockerImage(contextPath: String, imageName: String, tag: String = "latest", dockerfilePath: String? = null): CommandResult {
+        val fullImageName = if (tag.isNotBlank() && tag != "latest") "$imageName:$tag" else imageName
+        val dockerfileFlag = dockerfilePath?.let { " -f $it" } ?: ""
+        val command = "${settings.dockerPath} build$dockerfileFlag -t $fullImageName $contextPath"
+        return withSession { session ->
+            executeCommand(session, command)
+        }
+    }
+
+    fun executeCommand(command: String, inputBytes: ByteArray? = null): CommandResult {
+        return SshSessionPool.execute(settings, command, inputBytes)
+    }
+
     private fun <T> withSession(block: (Session) -> T): T {
         if (settings.host.isBlank()) {
             throw IllegalStateException("SSH Host is not configured. Please open Plugin Settings.")
@@ -368,104 +763,20 @@ class KubernetesSshClient(private val settings: SshProfile) {
             throw IllegalStateException("SSH Username is not configured. Please open Plugin Settings.")
         }
 
-        val session = createSession()
-        try {
-            session.connect(settings.connectionTimeoutSeconds * 1000)
-            return block(session)
-        } finally {
-            try {
-                session.disconnect()
-            } catch (_: Exception) {}
-        }
+        // Return block evaluation; individual executeCommand calls will use the connection pool
+        val dummySession = SshSessionPool.createNewSession(settings)
+        return block(dummySession)
     }
 
     fun createSession(): Session {
-        val jsch = JSch()
-
-        if (settings.authType == AuthType.PRIVATE_KEY && settings.privateKeyPath.isNotBlank()) {
-            val keyFile = File(settings.privateKeyPath)
-            if (!keyFile.exists()) {
-                throw IllegalArgumentException("Private key file does not exist: ${settings.privateKeyPath}")
-            }
-            if (settings.passphrase.isNotEmpty()) {
-                jsch.addIdentity(keyFile.absolutePath, settings.passphrase)
-            } else {
-                jsch.addIdentity(keyFile.absolutePath)
-            }
-        }
-
-        val port = if (settings.port > 0) settings.port else 22
-        val session = jsch.getSession(settings.username.trim(), settings.host.trim(), port)
-
-        if (settings.authType == AuthType.PASSWORD && settings.password.isNotEmpty()) {
-            session.setPassword(settings.password)
-        }
-
-        val config = Properties()
-        config["StrictHostKeyChecking"] = "no"
-        config["PreferredAuthentications"] = if (settings.authType == AuthType.PASSWORD) {
-            "password,keyboard-interactive,publickey"
-        } else {
-            "publickey,keyboard-interactive,password"
-        }
-        session.setConfig(config)
-        session.timeout = settings.connectionTimeoutSeconds * 1000
-
-        return session
+        return SshSessionPool.createNewSession(settings)
     }
 
     private fun executeCommand(session: Session, command: String, inputBytes: ByteArray? = null): CommandResult {
-        val channel = session.openChannel("exec") as ChannelExec
-        channel.setCommand(command)
-
-        if (inputBytes != null) {
-            channel.setInputStream(ByteArrayInputStream(inputBytes))
+        return if (session.isConnected) {
+            SshSessionPool.runCommandOnSession(session, command, settings.connectionTimeoutSeconds, inputBytes)
+        } else {
+            SshSessionPool.execute(settings, command, inputBytes)
         }
-
-        val stdoutStream = ByteArrayOutputStream()
-        val stderrStream = ByteArrayOutputStream()
-        channel.setErrStream(stderrStream)
-
-        val inputStream = channel.inputStream
-        val errStream = channel.errStream
-
-        channel.connect(settings.connectionTimeoutSeconds * 1000)
-
-        val buffer = ByteArray(1024)
-        val maxWaitMillis = (settings.connectionTimeoutSeconds * 1000).toLong().coerceAtLeast(15000L)
-        val startTime = System.currentTimeMillis()
-
-        while (true) {
-            while (inputStream.available() > 0) {
-                val len = inputStream.read(buffer, 0, 1024)
-                if (len < 0) break
-                stdoutStream.write(buffer, 0, len)
-            }
-            while (errStream.available() > 0) {
-                val len = errStream.read(buffer, 0, 1024)
-                if (len < 0) break
-                stderrStream.write(buffer, 0, len)
-            }
-            if (channel.isClosed) {
-                if (inputStream.available() > 0 || errStream.available() > 0) continue
-                break
-            }
-            if (System.currentTimeMillis() - startTime > maxWaitMillis) {
-                break
-            }
-            try {
-                Thread.sleep(50)
-            } catch (_: InterruptedException) {
-                break
-            }
-        }
-
-        val exitStatus = channel.exitStatus
-        channel.disconnect()
-
-        val output = stdoutStream.toString(Charsets.UTF_8.name())
-        val error = stderrStream.toString(Charsets.UTF_8.name())
-
-        return CommandResult(exitStatus, output, error)
     }
 }

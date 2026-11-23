@@ -26,6 +26,7 @@
     ]]></description>
 
     <depends>com.intellij.modules.platform</depends>
+    <depends optional="true">org.jetbrains.plugins.terminal</depends>
 
     <resource-bundle>messages.MyMessageBundle</resource-bundle>
 

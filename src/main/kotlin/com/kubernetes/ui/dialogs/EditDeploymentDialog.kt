@@ -3,9 +3,6 @@ package com.kubernetes.ui.dialogs
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ModalityState
-import com.intellij.openapi.progress.ProgressIndicator
-import com.intellij.openapi.progress.ProgressManager
-import com.intellij.openapi.progress.Task
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.ComboBox
 import com.intellij.openapi.ui.DialogWrapper
@@ -15,7 +12,9 @@ import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextArea
 import com.intellij.ui.components.JBTextField
 import com.intellij.util.ui.JBUI
+import com.kubernetes.cache.KubernetesDataCache
 import com.kubernetes.model.DeploymentInfo
+import com.kubernetes.model.ResourceType
 import com.kubernetes.settings.KubernetesSshSettings
 import com.kubernetes.ssh.KubernetesParser
 import com.kubernetes.ssh.KubernetesSshClient
@@ -147,7 +146,7 @@ class EditDeploymentDialog(
             }
             add(containerComboBox)
 
-            imageTextField.emptyText.text = "e.g. nginx:1.25-alpine"
+            imageTextField.emptyText.text = "e.g. nginx:1.25-alpine or /path:myapp:latest or C:\\path:myapp:latest"
             add(imageTextField)
 
             updateImageButton.addActionListener { updateContainerImage() }
@@ -245,98 +244,141 @@ class EditDeploymentDialog(
     }
 
     private fun loadDeploymentsAndSelect(toSelect: String?) {
+        val profile = KubernetesSshSettings.getInstance(project).state.getActiveProfile()
+        val cached = KubernetesDataCache.getDeployments(profile.id, namespace)
+
+        if (!cached.isNullOrEmpty()) {
+            availableDeployments = cached
+            isUpdatingCombo = true
+            deploymentComboBox.removeAllItems()
+            for (dep in cached) {
+                deploymentComboBox.addItem(dep.name)
+            }
+
+            val targetName = when {
+                !toSelect.isNullOrBlank() && cached.any { it.name == toSelect } -> toSelect
+                !toSelect.isNullOrBlank() -> {
+                    deploymentComboBox.addItem(toSelect)
+                    toSelect
+                }
+                cached.isNotEmpty() -> cached.first().name
+                else -> null
+            }
+
+            if (targetName != null) {
+                deploymentComboBox.selectedItem = targetName
+            }
+            isUpdatingCombo = false
+
+            if (targetName != null) {
+                loadDeploymentYaml(targetName)
+            }
+            return
+        }
+
         if (!isBusy.compareAndSet(false, true)) return
         statusLabel.text = "Fetching deployments in namespace '$namespace'..."
 
-        val client = KubernetesSshClient(KubernetesSshSettings.getInstance(project).state)
+        val client = KubernetesSshClient(profile)
 
-        ProgressManager.getInstance().run(object : Task.Backgroundable(project, "Loading Deployments", false) {
-            override fun run(indicator: ProgressIndicator) {
-                try {
-                    val deployments = client.getDeployments(namespace)
-                    runOnEdt {
-                        availableDeployments = deployments
+        ApplicationManager.getApplication().executeOnPooledThread {
+            try {
+                val deployments = client.getDeployments(namespace)
+                KubernetesDataCache.putDeployments(profile.id, namespace, deployments)
+                runOnEdt {
+                    availableDeployments = deployments
+                    isUpdatingCombo = true
+                    deploymentComboBox.removeAllItems()
+                    for (dep in deployments) {
+                        deploymentComboBox.addItem(dep.name)
+                    }
+
+                    val targetName = when {
+                        !toSelect.isNullOrBlank() && deployments.any { it.name == toSelect } -> toSelect
+                        !toSelect.isNullOrBlank() -> {
+                            // Add initial name if not present in the fetched list
+                            deploymentComboBox.addItem(toSelect)
+                            toSelect
+                        }
+                        deployments.isNotEmpty() -> deployments.first().name
+                        else -> null
+                    }
+
+                    if (targetName != null) {
+                        deploymentComboBox.selectedItem = targetName
+                    }
+                    isUpdatingCombo = false
+                    isBusy.set(false)
+
+                    if (targetName != null) {
+                        loadDeploymentYaml(targetName)
+                    } else {
+                        statusLabel.text = "No deployments found in namespace '$namespace'."
+                        yamlTextArea.text = "# No deployments found in namespace '$namespace'."
+                    }
+                }
+            } catch (e: Exception) {
+                runOnEdt {
+                    isBusy.set(false)
+                    statusLabel.text = "Error fetching deployments: ${e.message}"
+                    if (!toSelect.isNullOrBlank()) {
                         isUpdatingCombo = true
                         deploymentComboBox.removeAllItems()
-                        for (dep in deployments) {
-                            deploymentComboBox.addItem(dep.name)
-                        }
-
-                        val targetName = when {
-                            !toSelect.isNullOrBlank() && deployments.any { it.name == toSelect } -> toSelect
-                            !toSelect.isNullOrBlank() -> {
-                                // Add initial name if not present in the fetched list
-                                deploymentComboBox.addItem(toSelect)
-                                toSelect
-                            }
-                            deployments.isNotEmpty() -> deployments.first().name
-                            else -> null
-                        }
-
-                        if (targetName != null) {
-                            deploymentComboBox.selectedItem = targetName
-                        }
+                        deploymentComboBox.addItem(toSelect)
+                        deploymentComboBox.selectedItem = toSelect
                         isUpdatingCombo = false
-                        isBusy.set(false)
-
-                        if (targetName != null) {
-                            loadDeploymentYaml(targetName)
-                        } else {
-                            statusLabel.text = "No deployments found in namespace '$namespace'."
-                            yamlTextArea.text = "# No deployments found in namespace '$namespace'."
-                        }
-                    }
-                } catch (e: Exception) {
-                    runOnEdt {
-                        isBusy.set(false)
-                        statusLabel.text = "Error fetching deployments: ${e.message}"
-                        if (!toSelect.isNullOrBlank()) {
-                            isUpdatingCombo = true
-                            deploymentComboBox.removeAllItems()
-                            deploymentComboBox.addItem(toSelect)
-                            deploymentComboBox.selectedItem = toSelect
-                            isUpdatingCombo = false
-                            loadDeploymentYaml(toSelect)
-                        }
+                        loadDeploymentYaml(toSelect)
                     }
                 }
             }
-        })
+        }
     }
 
     private fun loadDeploymentYaml(deploymentName: String) {
         if (deploymentName.isBlank()) return
-        if (!isBusy.compareAndSet(false, true)) return
+        val profile = KubernetesSshSettings.getInstance(project).state.getActiveProfile()
 
         title = "Edit Deployment: $deploymentName ($namespace)"
-        statusLabel.text = "Loading YAML for deployment '$deploymentName'..."
-        val client = KubernetesSshClient(KubernetesSshSettings.getInstance(project).state)
+        val cachedYaml = KubernetesDataCache.getYaml(profile.id, namespace, "deployment", deploymentName)
+        if (cachedYaml != null) {
+            yamlTextArea.text = cachedYaml
+            yamlTextArea.caretPosition = 0
+            updateQuickControlsFromYaml(deploymentName, cachedYaml)
+            statusLabel.text = "Loaded deployment '$deploymentName' from cache."
+            return
+        }
 
-        ProgressManager.getInstance().run(object : Task.Backgroundable(project, "Loading Deployment YAML", false) {
-            override fun run(indicator: ProgressIndicator) {
-                try {
-                    val result = client.getDeploymentYaml(namespace, deploymentName)
-                    runOnEdt {
-                        isBusy.set(false)
-                        if (result.isSuccess && result.output.isNotBlank()) {
-                            yamlTextArea.text = result.output
-                            yamlTextArea.caretPosition = 0
-                            updateQuickControlsFromYaml(deploymentName, result.output)
-                            statusLabel.text = "Loaded deployment '$deploymentName' successfully."
-                        } else {
-                            val errorMsg = result.error.ifBlank { result.output }
-                            statusLabel.text = "Failed to load deployment: $errorMsg"
-                            yamlTextArea.text = "# Error loading deployment $deploymentName:\n# $errorMsg"
-                        }
-                    }
-                } catch (e: Exception) {
-                    runOnEdt {
-                        isBusy.set(false)
-                        statusLabel.text = "Error: ${e.message}"
+        if (!isBusy.compareAndSet(false, true)) return
+
+        statusLabel.text = "Loading YAML for deployment '$deploymentName'..."
+        val client = KubernetesSshClient(profile)
+
+        ApplicationManager.getApplication().executeOnPooledThread {
+            try {
+                val result = client.getDeploymentYaml(namespace, deploymentName)
+                runOnEdt {
+                    isBusy.set(false)
+                    if (result.isSuccess && result.output.isNotBlank()) {
+                        KubernetesDataCache.putYaml(profile.id, namespace, "deployment", deploymentName, result.output)
+                        yamlTextArea.text = result.output
+                        yamlTextArea.caretPosition = 0
+                        updateQuickControlsFromYaml(deploymentName, result.output)
+                        statusLabel.text = "Loaded deployment '$deploymentName' successfully."
+                    } else {
+                        val errorMsg = result.error.ifBlank { result.output }
+                        statusLabel.text = "Failed to load deployment: $errorMsg"
+                        yamlTextArea.text = "# Error loading deployment $deploymentName:\n# $errorMsg"
                     }
                 }
+            } catch (e: Exception) {
+                runOnEdt {
+                    val msg = e.message ?: "Unknown error"
+                    isBusy.set(false)
+                    statusLabel.text = "Error: $msg"
+                    yamlTextArea.text = "# Error loading deployment $deploymentName:\n# $msg"
+                }
             }
-        })
+        }
     }
 
     private fun updateQuickControlsFromYaml(deploymentName: String, yamlText: String) {
@@ -389,67 +431,143 @@ class EditDeploymentDialog(
         val newReplicas = replicasSpinner.value as? Int ?: return
         if (!isBusy.compareAndSet(false, true)) return
 
+        val profile = KubernetesSshSettings.getInstance(project).state.getActiveProfile()
         statusLabel.text = "Scaling deployment '$deploymentName' to $newReplicas replicas..."
-        val client = KubernetesSshClient(KubernetesSshSettings.getInstance(project).state)
+        val client = KubernetesSshClient(profile)
 
-        ProgressManager.getInstance().run(object : Task.Backgroundable(project, "Scaling Deployment", false) {
-            override fun run(indicator: ProgressIndicator) {
+        ApplicationManager.getApplication().executeOnPooledThread {
+            try {
+                val result = client.scaleDeployment(namespace, deploymentName, newReplicas)
+                runOnEdt {
+                    isBusy.set(false)
+                    if (result.isSuccess) {
+                        statusLabel.text = "Deployment '$deploymentName' scaled to $newReplicas replicas."
+                        Messages.showInfoMessage(
+                            project,
+                            "Successfully scaled deployment '$deploymentName' to $newReplicas replicas.\n${result.output.trim()}",
+                            "Scale Deployment"
+                        )
+                        KubernetesDataCache.invalidateResourceType(profile.id, namespace, ResourceType.DEPLOYMENTS)
+                        KubernetesDataCache.invalidateResourceType(profile.id, namespace, ResourceType.PODS)
+                        onDeploymentUpdated?.invoke()
+                        loadDeploymentYaml(deploymentName)
+                    } else {
+                        val errorMsg = result.error.ifBlank { result.output }
+                        statusLabel.text = "Failed to scale deployment: $errorMsg"
+                        Messages.showErrorDialog(project, "Error scaling deployment:\n$errorMsg", "Scale Error")
+                    }
+                }
+            } catch (e: Exception) {
+                runOnEdt {
+                    isBusy.set(false)
+                    statusLabel.text = "Error: ${e.message}"
+                    Messages.showErrorDialog(project, "Error: ${e.message}", "Scale Error")
+                }
+            }
+        }
+    }
+
+    private fun updateContainerImage() {
+        val deploymentName = deploymentComboBox.selectedItem as? String ?: return
+        val containerName = containerComboBox.selectedItem as? String ?: return
+        val imageInput = imageTextField.text.trim()
+        if (imageInput.isBlank()) {
+            Messages.showWarningDialog(project, "Please enter a valid container image name/tag.", "Invalid Image")
+            return
+        }
+        if (!isBusy.compareAndSet(false, true)) return
+
+        val profile = KubernetesSshSettings.getInstance(project).state.getActiveProfile()
+        val client = KubernetesSshClient(profile)
+
+        // Check if the input is an absolute path (docker build context on SSH server)
+        // Format: /path/to/context:image:tag or /path/to/context:image
+        val parsed = parseImageInput(imageInput)
+
+        if (parsed.buildContext != null) {
+            // Validate that an image name was provided
+            if (parsed.buildImageName.isNullOrBlank()) {
+                isBusy.set(false)
+                Messages.showWarningDialog(
+                    project,
+                    "When using an absolute path, you must specify the image name and optional tag.\n\n" +
+                            "Unix format: /path/to/context:imagename:tag\n" +
+                            "Windows format: C:\\path\\to\\context:imagename:tag\n\n" +
+                            "Example: /home/user/myapp:myapp:latest\n" +
+                            "Example: C:\\Users\\myapp:myapp:latest",
+                    "Invalid Path Format"
+                )
+                return
+            }
+
+            val buildContext = parsed.buildContext
+            val buildImageName = parsed.buildImageName
+            val buildTag = parsed.buildTag ?: "latest"
+            val finalImage = parsed.finalImage
+
+            // Absolute path provided – build the image first, then deploy
+            statusLabel.text = "Building docker image from '$buildContext' on remote server..."
+            ApplicationManager.getApplication().executeOnPooledThread {
                 try {
-                    val result = client.scaleDeployment(namespace, deploymentName, newReplicas)
+                    val buildResult = client.buildDockerImage(buildContext, buildImageName, buildTag)
+                    if (!buildResult.isSuccess) {
+                        val errorMsg = buildResult.error.ifBlank { buildResult.output }
+                        runOnEdt {
+                            isBusy.set(false)
+                            statusLabel.text = "Docker build failed: $errorMsg"
+                            Messages.showErrorDialog(project, "Failed to build docker image:\n$errorMsg", "Docker Build Error")
+                        }
+                        return@executeOnPooledThread
+                    }
+
+                    statusLabel.text = "Image built successfully. Updating container '$containerName' in deployment '$deploymentName' to image '$finalImage'..."
+                    val deployResult = client.updateDeploymentImage(namespace, deploymentName, containerName, finalImage)
                     runOnEdt {
                         isBusy.set(false)
-                        if (result.isSuccess) {
-                            statusLabel.text = "Deployment '$deploymentName' scaled to $newReplicas replicas."
+                        if (deployResult.isSuccess) {
+                            statusLabel.text = "Built image and updated container '$containerName' to image '$finalImage'."
                             Messages.showInfoMessage(
                                 project,
-                                "Successfully scaled deployment '$deploymentName' to $newReplicas replicas.\n${result.output.trim()}",
-                                "Scale Deployment"
+                                "Successfully built docker image and updated container image for '$deploymentName':\n${deployResult.output.trim()}",
+                                "Build & Update Image"
                             )
+                            KubernetesDataCache.invalidateResourceType(profile.id, namespace, ResourceType.DEPLOYMENTS)
+                            KubernetesDataCache.invalidateResourceType(profile.id, namespace, ResourceType.PODS)
+                            KubernetesDataCache.invalidateDockerImages(profile.id)
                             onDeploymentUpdated?.invoke()
                             loadDeploymentYaml(deploymentName)
                         } else {
-                            val errorMsg = result.error.ifBlank { result.output }
-                            statusLabel.text = "Failed to scale deployment: $errorMsg"
-                            Messages.showErrorDialog(project, "Error scaling deployment:\n$errorMsg", "Scale Error")
+                            val errorMsg = deployResult.error.ifBlank { deployResult.output }
+                            statusLabel.text = "Failed to update image: $errorMsg"
+                            Messages.showErrorDialog(project, "Error updating image:\n$errorMsg", "Update Image Error")
                         }
                     }
                 } catch (e: Exception) {
                     runOnEdt {
                         isBusy.set(false)
                         statusLabel.text = "Error: ${e.message}"
-                        Messages.showErrorDialog(project, "Error: ${e.message}", "Scale Error")
+                        Messages.showErrorDialog(project, "Error: ${e.message}", "Build & Update Error")
                     }
                 }
             }
-        })
-    }
-
-    private fun updateContainerImage() {
-        val deploymentName = deploymentComboBox.selectedItem as? String ?: return
-        val containerName = containerComboBox.selectedItem as? String ?: return
-        val newImage = imageTextField.text.trim()
-        if (newImage.isBlank()) {
-            Messages.showWarningDialog(project, "Please enter a valid container image name/tag.", "Invalid Image")
-            return
-        }
-        if (!isBusy.compareAndSet(false, true)) return
-
-        statusLabel.text = "Updating container '$containerName' in deployment '$deploymentName' to image '$newImage'..."
-        val client = KubernetesSshClient(KubernetesSshSettings.getInstance(project).state)
-
-        ProgressManager.getInstance().run(object : Task.Backgroundable(project, "Updating Deployment Image", false) {
-            override fun run(indicator: ProgressIndicator) {
+        } else {
+            // Regular image name – just update the deployment
+            val regularImage = parsed.finalImage
+            statusLabel.text = "Updating container '$containerName' in deployment '$deploymentName' to image '$regularImage'..."
+            ApplicationManager.getApplication().executeOnPooledThread {
                 try {
-                    val result = client.updateDeploymentImage(namespace, deploymentName, containerName, newImage)
+                    val result = client.updateDeploymentImage(namespace, deploymentName, containerName, regularImage)
                     runOnEdt {
                         isBusy.set(false)
                         if (result.isSuccess) {
-                            statusLabel.text = "Updated container '$containerName' to image '$newImage'."
+                            statusLabel.text = "Updated container '$containerName' to image '$regularImage'."
                             Messages.showInfoMessage(
                                 project,
                                 "Successfully updated container image for '$deploymentName':\n${result.output.trim()}",
                                 "Update Image"
                             )
+                            KubernetesDataCache.invalidateResourceType(profile.id, namespace, ResourceType.DEPLOYMENTS)
+                            KubernetesDataCache.invalidateResourceType(profile.id, namespace, ResourceType.PODS)
                             onDeploymentUpdated?.invoke()
                             loadDeploymentYaml(deploymentName)
                         } else {
@@ -466,7 +584,59 @@ class EditDeploymentDialog(
                     }
                 }
             }
-        })
+        }
+    }
+
+    private data class ParsedImageInput(
+        val finalImage: String,
+        val buildContext: String?,
+        val buildImageName: String?,
+        val buildTag: String?
+    )
+
+    private fun parseImageInput(input: String): ParsedImageInput {
+        // Check if input is an absolute path (Unix or Windows)
+        // Unix: /path/to/context:image:tag
+        // Windows: C:\path\to\context:image:tag
+        if (isAbsolutePath(input)) {
+            // For absolute paths, find the first ':' that separates the path from the image name.
+            // For Windows paths like C:\path\to\context:image:tag, the drive letter colon is part of the path.
+            val colonIndex = findImageNameSeparator(input)
+            if (colonIndex == -1) {
+                // No image name separator found – just a path, invalid
+                return ParsedImageInput(input, input, null, null)
+            }
+            val buildContext = input.substring(0, colonIndex)
+            val rest = input.substring(colonIndex + 1)
+            // rest is now "image:tag" or just "image"
+            val restParts = rest.split(":")
+            return when (restParts.size) {
+                1 -> ParsedImageInput("${restParts[0]}:latest", buildContext, restParts[0], "latest")
+                else -> ParsedImageInput(rest, buildContext, restParts[0], restParts.drop(1).joinToString(":"))
+            }
+        }
+        // Regular image name
+        return ParsedImageInput(input, null, null, null)
+    }
+
+    private fun isAbsolutePath(input: String): Boolean {
+        // Unix absolute path
+        if (input.startsWith("/")) return true
+        // Windows absolute path: C:\ or C:/
+        if (input.length >= 3 && input[1] == ':' && (input[2] == '\\' || input[2] == '/')) return true
+        return false
+    }
+
+    private fun findImageNameSeparator(input: String): Int {
+        // Find the first ':' that separates the build context path from the image name.
+        // For Windows paths like C:\path\to\context:image:tag, skip the drive letter colon.
+        // For Unix paths like /path/to/context:image:tag, find the first colon.
+        val startIndex = if (isWindowsPath(input)) 2 else 0
+        return input.indexOf(':', startIndex)
+    }
+
+    private fun isWindowsPath(input: String): Boolean {
+        return input.length >= 3 && input[1] == ':' && (input[2] == '\\' || input[2] == '/')
     }
 
     private fun restartRollout() {
@@ -480,70 +650,70 @@ class EditDeploymentDialog(
         if (confirm != Messages.YES) return
 
         if (!isBusy.compareAndSet(false, true)) return
+        val profile = KubernetesSshSettings.getInstance(project).state.getActiveProfile()
         statusLabel.text = "Restarting rollout for deployment '$deploymentName'..."
-        val client = KubernetesSshClient(KubernetesSshSettings.getInstance(project).state)
+        val client = KubernetesSshClient(profile)
 
-        ProgressManager.getInstance().run(object : Task.Backgroundable(project, "Restarting Rollout", false) {
-            override fun run(indicator: ProgressIndicator) {
-                try {
-                    val result = client.restartDeploymentRollout(namespace, deploymentName)
-                    runOnEdt {
-                        isBusy.set(false)
-                        if (result.isSuccess) {
-                            statusLabel.text = "Rollout restarted for deployment '$deploymentName'."
-                            Messages.showInfoMessage(
-                                project,
-                                "Rollout restarted successfully:\n${result.output.trim()}",
-                                "Restart Rollout"
-                            )
-                            onDeploymentUpdated?.invoke()
-                        } else {
-                            val errorMsg = result.error.ifBlank { result.output }
-                            statusLabel.text = "Failed to restart rollout: $errorMsg"
-                            Messages.showErrorDialog(project, "Error restarting rollout:\n$errorMsg", "Rollout Error")
-                        }
-                    }
-                } catch (e: Exception) {
-                    runOnEdt {
-                        isBusy.set(false)
-                        statusLabel.text = "Error: ${e.message}"
-                        Messages.showErrorDialog(project, "Error: ${e.message}", "Rollout Error")
+        ApplicationManager.getApplication().executeOnPooledThread {
+            try {
+                val result = client.restartDeploymentRollout(namespace, deploymentName)
+                runOnEdt {
+                    isBusy.set(false)
+                    if (result.isSuccess) {
+                        statusLabel.text = "Rollout restarted for deployment '$deploymentName'."
+                        Messages.showInfoMessage(
+                            project,
+                            "Rollout restarted successfully:\n${result.output.trim()}",
+                            "Restart Rollout"
+                        )
+                        KubernetesDataCache.invalidateResourceType(profile.id, namespace, ResourceType.DEPLOYMENTS)
+                        KubernetesDataCache.invalidateResourceType(profile.id, namespace, ResourceType.PODS)
+                        onDeploymentUpdated?.invoke()
+                    } else {
+                        val errorMsg = result.error.ifBlank { result.output }
+                        statusLabel.text = "Failed to restart rollout: $errorMsg"
+                        Messages.showErrorDialog(project, "Error restarting rollout:\n$errorMsg", "Rollout Error")
                     }
                 }
+            } catch (e: Exception) {
+                runOnEdt {
+                    isBusy.set(false)
+                    statusLabel.text = "Error: ${e.message}"
+                    Messages.showErrorDialog(project, "Error: ${e.message}", "Rollout Error")
+                }
             }
-        })
+        }
     }
 
     private fun showRolloutStatus() {
         val deploymentName = deploymentComboBox.selectedItem as? String ?: return
         if (!isBusy.compareAndSet(false, true)) return
 
+        val profile = KubernetesSshSettings.getInstance(project).state.getActiveProfile()
         statusLabel.text = "Checking rollout status for deployment '$deploymentName'..."
-        val client = KubernetesSshClient(KubernetesSshSettings.getInstance(project).state)
+        val client = KubernetesSshClient(profile)
 
-        ProgressManager.getInstance().run(object : Task.Backgroundable(project, "Checking Rollout Status", false) {
-            override fun run(indicator: ProgressIndicator) {
-                try {
-                    val result = client.getDeploymentRolloutStatus(namespace, deploymentName)
-                    runOnEdt {
-                        isBusy.set(false)
-                        val output = (result.output.ifBlank { result.error }).trim()
-                        statusLabel.text = "Rollout status retrieved."
-                        Messages.showInfoMessage(
-                            project,
-                            "Deployment Rollout Status ($deploymentName):\n\n$output",
-                            "Rollout Status"
-                        )
-                    }
-                } catch (e: Exception) {
-                    runOnEdt {
-                        isBusy.set(false)
-                        statusLabel.text = "Error: ${e.message}"
-                        Messages.showErrorDialog(project, "Error: ${e.message}", "Rollout Status Error")
-                    }
+        ApplicationManager.getApplication().executeOnPooledThread {
+            try {
+                val result = client.getDeploymentRolloutStatus(namespace, deploymentName)
+                runOnEdt {
+                    isBusy.set(false)
+                    val output = (result.output.ifBlank { result.error }).trim()
+                    statusLabel.text = "Rollout status retrieved."
+                    Messages.showInfoMessage(
+                        project,
+                        "Deployment Rollout Status ($deploymentName):\n\n$output",
+                        "Rollout Status"
+                    )
+                }
+            } catch (e: Exception) {
+                runOnEdt {
+                    isBusy.set(false)
+                    statusLabel.text = "Error: ${e.message}"
+                    Messages.showErrorDialog(project, "Error: ${e.message}", "Rollout Status Error")
                 }
             }
-        })
+        }
     }
 
     private fun dryRunValidateYaml() {
@@ -554,41 +724,40 @@ class EditDeploymentDialog(
         }
 
         if (!isBusy.compareAndSet(false, true)) return
+        val profile = KubernetesSshSettings.getInstance(project).state.getActiveProfile()
         statusLabel.text = "Validating YAML manifest with cluster (server dry-run)..."
-        val client = KubernetesSshClient(KubernetesSshSettings.getInstance(project).state)
+        val client = KubernetesSshClient(profile)
 
-        ProgressManager.getInstance().run(object : Task.Backgroundable(project, "Validating Deployment YAML", false) {
-            override fun run(indicator: ProgressIndicator) {
-                try {
-                    val result = client.applyDeploymentYaml(namespace, yamlText, dryRun = true)
-                    runOnEdt {
-                        isBusy.set(false)
-                        if (result.isSuccess) {
-                            statusLabel.text = "✓ Dry-run validation passed successfully!"
-                            Messages.showInfoMessage(
-                                project,
-                                "YAML manifest is valid and can be applied without errors.\n\n${result.output.trim()}",
-                                "Dry-Run Validation Succeeded"
-                            )
-                        } else {
-                            val errorMsg = result.error.ifBlank { result.output }
-                            statusLabel.text = "✗ Dry-run validation failed: $errorMsg"
-                            Messages.showErrorDialog(
-                                project,
-                                "Dry-run validation reported errors:\n\n$errorMsg",
-                                "Dry-Run Validation Failed"
-                            )
-                        }
-                    }
-                } catch (e: Exception) {
-                    runOnEdt {
-                        isBusy.set(false)
-                        statusLabel.text = "Error: ${e.message}"
-                        Messages.showErrorDialog(project, "Error: ${e.message}", "Validation Error")
+        ApplicationManager.getApplication().executeOnPooledThread {
+            try {
+                val result = client.applyDeploymentYaml(namespace, yamlText, dryRun = true)
+                runOnEdt {
+                    isBusy.set(false)
+                    if (result.isSuccess) {
+                        statusLabel.text = "✓ Dry-run validation passed successfully!"
+                        Messages.showInfoMessage(
+                            project,
+                            "YAML manifest is valid and can be applied without errors.\n\n${result.output.trim()}",
+                            "Dry-Run Validation Succeeded"
+                        )
+                    } else {
+                        val errorMsg = result.error.ifBlank { result.output }
+                        statusLabel.text = "✗ Dry-run validation failed: $errorMsg"
+                        Messages.showErrorDialog(
+                            project,
+                            "Dry-run validation reported errors:\n\n$errorMsg",
+                            "Dry-Run Validation Failed"
+                        )
                     }
                 }
+            } catch (e: Exception) {
+                runOnEdt {
+                    isBusy.set(false)
+                    statusLabel.text = "Error: ${e.message}"
+                    Messages.showErrorDialog(project, "Error: ${e.message}", "Validation Error")
+                }
             }
-        })
+        }
     }
 
     private fun applyEditedYaml() {
@@ -608,42 +777,44 @@ class EditDeploymentDialog(
         if (confirm != Messages.YES) return
 
         if (!isBusy.compareAndSet(false, true)) return
+        val profile = KubernetesSshSettings.getInstance(project).state.getActiveProfile()
         statusLabel.text = "Applying YAML manifest to cluster..."
-        val client = KubernetesSshClient(KubernetesSshSettings.getInstance(project).state)
+        val client = KubernetesSshClient(profile)
 
-        ProgressManager.getInstance().run(object : Task.Backgroundable(project, "Applying Deployment YAML", false) {
-            override fun run(indicator: ProgressIndicator) {
-                try {
-                    val result = client.applyDeploymentYaml(namespace, yamlText, dryRun = false)
-                    runOnEdt {
-                        isBusy.set(false)
-                        if (result.isSuccess) {
-                            statusLabel.text = "✓ Deployment applied successfully!"
-                            Messages.showInfoMessage(
-                                project,
-                                "Deployment applied successfully:\n\n${result.output.trim()}",
-                                "Deployment Applied"
-                            )
-                            onDeploymentUpdated?.invoke()
-                            close(OK_EXIT_CODE)
-                        } else {
-                            val errorMsg = result.error.ifBlank { result.output }
-                            statusLabel.text = "✗ Failed to apply deployment: $errorMsg"
-                            Messages.showErrorDialog(
-                                project,
-                                "Failed to apply deployment manifest:\n\n$errorMsg",
-                                "Apply Error"
-                            )
-                        }
-                    }
-                } catch (e: Exception) {
-                    runOnEdt {
-                        isBusy.set(false)
-                        statusLabel.text = "Error: ${e.message}"
-                        Messages.showErrorDialog(project, "Error applying deployment: ${e.message}", "Apply Error")
+        ApplicationManager.getApplication().executeOnPooledThread {
+            try {
+                val result = client.applyDeploymentYaml(namespace, yamlText, dryRun = false)
+                runOnEdt {
+                    isBusy.set(false)
+                    if (result.isSuccess) {
+                        statusLabel.text = "✓ Deployment applied successfully!"
+                        KubernetesDataCache.putYaml(profile.id, namespace, "deployment", deploymentName, yamlText)
+                        KubernetesDataCache.invalidateResourceType(profile.id, namespace, ResourceType.DEPLOYMENTS)
+                        KubernetesDataCache.invalidateResourceType(profile.id, namespace, ResourceType.PODS)
+                        Messages.showInfoMessage(
+                            project,
+                            "Deployment applied successfully:\n\n${result.output.trim()}",
+                            "Deployment Applied"
+                        )
+                        onDeploymentUpdated?.invoke()
+                        close(OK_EXIT_CODE)
+                    } else {
+                        val errorMsg = result.error.ifBlank { result.output }
+                        statusLabel.text = "✗ Failed to apply deployment: $errorMsg"
+                        Messages.showErrorDialog(
+                            project,
+                            "Failed to apply deployment manifest:\n\n$errorMsg",
+                            "Apply Error"
+                        )
                     }
                 }
+            } catch (e: Exception) {
+                runOnEdt {
+                    isBusy.set(false)
+                    statusLabel.text = "Error: ${e.message}"
+                    Messages.showErrorDialog(project, "Error applying deployment: ${e.message}", "Apply Error")
+                }
             }
-        })
+        }
     }
 }

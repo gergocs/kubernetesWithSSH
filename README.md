@@ -11,7 +11,33 @@
 
 - **Multiple SSH Profiles**: Configure and manage multiple remote SSH profiles under IDE **Settings -> Tools -> Kubernetes over SSH**. Add, duplicate, rename, delete, test connection per profile, and switch between active profiles directly from the Tool Window or Settings.
 - **SSH Configuration**: Configure remote host, port, username, authentication (Password or Private Key file with optional passphrase), and remote `kubectl` and `docker` binary locations. Includes a built-in **Test SSH Connection** button.
-- **Right-side Tool Window**: Access the **Kubernetes SSH** tool window anchored to the right side of the IDE with dedicated **Pods**, **Docker Images**, and **Kubectl** tabs with instant profile switching.
+- **Right-side Tool Window**: Access the **Kubernetes SSH** tool window anchored to the right side of the IDE with dedicated **Pods & Resources**, **Tail Logs**, **Docker Images**, and **Kubectl** tabs with instant profile switching.
+- **Dedicated Tail Logs Viewer (Multi-Pod Streaming)**:
+  - Separate non-blocking tab to continuously stream and tail live logs while working on other tasks across the IDE.
+  - Concurrent multi-pod streaming support: tail multiple pods simultaneously in an aggregated stream with color-coded pod identifiers or in dedicated individual sub-tabs.
+  - Interactive stream controls: Pause / Resume live streaming, restart, clear console buffer, and soft wrap toggle.
+  - Configurable tail depth (`50`, `100`, `200`, `500`, `1000`, or `All`), Follow mode (`-f`), timestamp toggling (`--timestamps`), and previous terminated container log inspection (`-p`).
+  - Container-level targeting for multi-container pods (`-c <container>`).
+  - Real-time search and filter with instant match highlighting.
+  - One-click clipboard export and line count metrics.
+- **Resource Explorer (Pods, Services, Ingresses, ConfigMaps, Secrets, Deployments, StatefulSets, DaemonSets, Jobs, CronJobs, PersistentVolumeClaims, Events)**:
+  - Toggle seamlessly across all major Kubernetes resource types within the main explorer tab:
+  - **Tier 1 (High Impact)**:
+    - **Secrets**: Inspect encoded and decoded Base64 contents with a dedicated viewer, key inspector, and YAML editor with dry-run verification.
+    - **Ingresses**: View Class, Hosts, Address, Ports, Age, routing rules, describe, and edit YAML.
+  - **Tier 2 (Diagnostics & Batch)**:
+    - **Jobs**: Monitor completions, run duration, containers, images, conditions, view snapshot logs, tail logs in the Tail Logs tab, and describe.
+    - **CronJobs**: Inspect execution schedule, suspend flag, active runs, last schedule time, and manually trigger jobs ("Run Now").
+    - **Events**: Dedicated event inspector tracking Warning/Normal types, reasons, involved objects, error messages, occurrence counts, and sources.
+  - **Tier 3 (Extended Infrastructure)**:
+    - **StatefulSets**: Track replica readiness, quick-scale replicas, restart rollouts, and edit YAML manifests.
+    - **DaemonSets**: Monitor desired/ready node allocations, up-to-date/available daemon pods, node selectors, and restart rollouts.
+    - **PersistentVolumeClaims (PVCs)**: Inspect bound status, volume bindings, requested/actual storage capacity, access modes, and storage classes.
+  - **Core Workloads & Config**:
+    - **Pods**: View real-time pod metrics (Status, Ready ratio, Restarts, Age, Docker Image & ID, Node, Pod IP). Execute interactive terminal, view logs, describe, delete / force delete, and jump directly to Docker Images tab.
+    - **Services**: View Name, Type (ClusterIP, NodePort, LoadBalancer, ExternalName), Cluster IP, External IP, Ports, Age, and Selectors.
+    - **ConfigMaps**: View Name, Data Keys, Key Count, and Age with dedicated key-value and YAML inspector.
+    - **Deployments**: Monitor replica readiness, up-to-date, available replicas, images, and container specs with interactive scaling and rollout control.
 - **Custom Kubectl Console**: Dedicated tab allowing users to execute arbitrary custom `kubectl` commands over SSH. Features interactive command execution, quick snippet presets (`get nodes`, `get pods -A`, `cluster-info`, `top nodes`, `api-resources`, etc.), Up/Down arrow command history, live output search/filtering, execution timestamps, duration tracking, exit code status indicators, auto-namespace appending (`-n <namespace>`), output appending/clearing, and one-click clipboard copying.
 - **Auto-Refresh**: Continuous 5-second background auto-refresh for both Pods and Docker Images with intelligent table row selection retention and non-blocking asynchronous updates.
 - **Namespace Switching**: Discover and switch between all available namespaces in the remote cluster.
@@ -33,6 +59,17 @@
   - Describe Pod details with full cluster inspection.
   - Live search / filter across pod names, images, image IDs, statuses, nodes, and IPs.
   - Async non-blocking execution to keep IDE responsive.
+
+## 🧪 Testing with the Example Kubernetes Application
+
+A full, ready-to-deploy multi-tier demo application is included under [`examples/`](./examples/) to test all plugin functionality (namespacing, pods, multi-container terminals, logs, deployment editing/scaling, crash loops, cronjobs, and Docker integration).
+
+To deploy the test suite:
+- **Linux / macOS / WSL**: `./examples/deploy.sh`
+- **Windows (PowerShell)**: `.\examples\deploy.ps1`
+- **Local SSH Sandbox**: `cd examples/docker-ssh-sandbox && docker compose up -d`
+
+See [examples/README.md](./examples/README.md) for the complete feature testing guide and architecture details.
 
 ## Plugin structure
 

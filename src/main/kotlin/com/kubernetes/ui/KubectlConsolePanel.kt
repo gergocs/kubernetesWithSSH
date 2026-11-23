@@ -19,6 +19,7 @@ import com.intellij.openapi.ui.Messages
 import com.intellij.ui.DocumentAdapter
 import com.intellij.ui.JBColor
 import com.intellij.ui.SearchTextField
+import com.intellij.ui.SimpleListCellRenderer
 import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
@@ -41,11 +42,17 @@ import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
 import java.awt.event.KeyAdapter
 import java.awt.event.KeyEvent
+import java.awt.event.MouseAdapter
+import java.awt.event.MouseEvent
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.atomic.AtomicBoolean
+import javax.swing.Box
+import javax.swing.BoxLayout
 import javax.swing.JButton
+import javax.swing.JMenuItem
 import javax.swing.JPanel
+import javax.swing.JPopupMenu
 import javax.swing.event.DocumentEvent
 import javax.swing.text.DefaultHighlighter
 
@@ -105,48 +112,80 @@ class KubectlConsolePanel(private val project: Project) : JPanel(BorderLayout())
     }
 
     private fun setupUI() {
-        border = JBUI.Borders.empty(4)
+        border = JBUI.Borders.empty(2)
 
         // 1. Top Panel: Profile, Namespace, Presets, and Main Action Toolbar
-        val topPanel = JPanel(BorderLayout())
+        val topPanel = JPanel(BorderLayout(JBUI.scale(8), 0)).apply {
+            border = JBUI.Borders.empty(2, 4)
+        }
 
-        val selectorsPanel = JPanel(FlowLayout(FlowLayout.LEFT, 4, 2)).apply {
-            profileComboBox.toolTipText = "Select SSH Profile"
-            profileComboBox.prototypeDisplayValue = SshProfile(name = "production-server-profile")
-            profileComboBox.addActionListener {
-                if (!isUpdatingProfiles) {
-                    val selectedProf = profileComboBox.selectedItem as? SshProfile
-                    if (selectedProf != null) {
-                        val settings = KubernetesSshSettings.getInstance(project)
-                        settings.state.selectProfile(selectedProf.id)
-                        onProfileChanged?.invoke(selectedProf)
-                        loadNamespaces()
-                    }
+        profileComboBox.toolTipText = "Select SSH Profile"
+        profileComboBox.renderer = object : SimpleListCellRenderer<SshProfile>() {
+            override fun customize(list: javax.swing.JList<out SshProfile>, value: SshProfile?, index: Int, selected: Boolean, hasFocus: Boolean) {
+                if (value != null) {
+                    text = value.name.ifBlank { value.host }
+                    icon = AllIcons.General.Web
                 }
             }
+        }
+        profileComboBox.prototypeDisplayValue = SshProfile(name = "production-server-profile")
+        profileComboBox.addActionListener {
+            if (!isUpdatingProfiles) {
+                val selectedProf = profileComboBox.selectedItem as? SshProfile
+                if (selectedProf != null) {
+                    val settings = KubernetesSshSettings.getInstance(project)
+                    settings.state.selectProfile(selectedProf.id)
+                    onProfileChanged?.invoke(selectedProf)
+                    loadNamespaces()
+                }
+            }
+        }
+
+        namespaceComboBox.toolTipText = "Select Kubernetes Namespace"
+        namespaceComboBox.renderer = object : SimpleListCellRenderer<String>() {
+            override fun customize(list: javax.swing.JList<out String>, value: String?, index: Int, selected: Boolean, hasFocus: Boolean) {
+                if (value != null) {
+                    text = value
+                    icon = AllIcons.Nodes.Folder
+                }
+            }
+        }
+        namespaceComboBox.prototypeDisplayValue = "kube-system-long-namespace"
+        namespaceComboBox.addActionListener {
+            if (!isUpdatingNamespaces) {
+                val selectedNs = namespaceComboBox.selectedItem as? String
+                if (!selectedNs.isNullOrBlank()) {
+                    onNamespaceChanged?.invoke(selectedNs)
+                }
+            }
+        }
+
+        presetsComboBox.renderer = object : SimpleListCellRenderer<String>() {
+            override fun customize(list: javax.swing.JList<out String>, value: String?, index: Int, selected: Boolean, hasFocus: Boolean) {
+                if (value != null) {
+                    text = value
+                    icon = if (value.startsWith("--")) null else AllIcons.Nodes.Console
+                }
+            }
+        }
+        presets.forEach { presetsComboBox.addItem(it) }
+        presetsComboBox.toolTipText = "Select a quick command preset"
+        presetsComboBox.addActionListener {
+            val selected = presetsComboBox.selectedItem as? String
+            if (!selected.isNullOrBlank() && !selected.startsWith("--")) {
+                commandInputField.text = selected
+                commandInputField.requestFocusInWindow()
+            }
+        }
+
+        val selectorsPanel = JPanel(FlowLayout(FlowLayout.LEFT, JBUI.scale(6), 0)).apply {
+            add(JBLabel("Profile:").apply { font = font.deriveFont(Font.BOLD) })
             add(profileComboBox)
-
-            namespaceComboBox.toolTipText = "Select Kubernetes Namespace"
-            namespaceComboBox.prototypeDisplayValue = "kube-system-long-namespace"
-            namespaceComboBox.addActionListener {
-                if (!isUpdatingNamespaces) {
-                    val selectedNs = namespaceComboBox.selectedItem as? String
-                    if (!selectedNs.isNullOrBlank()) {
-                        onNamespaceChanged?.invoke(selectedNs)
-                    }
-                }
-            }
+            add(Box.createHorizontalStrut(JBUI.scale(4)))
+            add(JBLabel("Namespace:").apply { font = font.deriveFont(Font.BOLD) })
             add(namespaceComboBox)
-
-            presets.forEach { presetsComboBox.addItem(it) }
-            presetsComboBox.toolTipText = "Select a quick command preset"
-            presetsComboBox.addActionListener {
-                val selected = presetsComboBox.selectedItem as? String
-                if (!selected.isNullOrBlank() && !selected.startsWith("--")) {
-                    commandInputField.text = selected
-                    commandInputField.requestFocusInWindow()
-                }
-            }
+            add(Box.createHorizontalStrut(JBUI.scale(4)))
+            add(JBLabel("Preset:").apply { font = font.deriveFont(Font.BOLD) })
             add(presetsComboBox)
         }
 
@@ -195,14 +234,14 @@ class KubectlConsolePanel(private val project: Project) : JPanel(BorderLayout())
         topPanel.add(toolbar.component, BorderLayout.EAST)
 
         // 2. Command Input Box Panel
-        val inputCardPanel = JPanel(BorderLayout(4, 2)).apply {
+        val inputCardPanel = JPanel(BorderLayout(JBUI.scale(6), 0)).apply {
             border = JBUI.Borders.compound(
                 JBUI.Borders.customLine(JBColor.border(), 1, 0, 1, 0),
-                JBUI.Borders.empty(4, 2)
+                JBUI.Borders.empty(4, 6)
             )
 
             val prefixLabel = JBLabel("kubectl ").apply {
-                font = Font(Font.MONOSPACED, Font.BOLD, 12)
+                font = Font(Font.MONOSPACED, Font.BOLD, 13)
                 foreground = JBColor.namedColor("Label.infoForeground", Color(0x38, 0x8E, 0x3C))
             }
 
@@ -226,7 +265,7 @@ class KubectlConsolePanel(private val project: Project) : JPanel(BorderLayout())
             autoNamespaceCheckBox.toolTipText = "Automatically append '-n <namespace>' if not already present in the command"
             appendOutputCheckBox.toolTipText = "Append new command output to existing output instead of replacing it"
 
-            val rightOptionsPanel = JPanel(FlowLayout(FlowLayout.RIGHT, 4, 0)).apply {
+            val rightOptionsPanel = JPanel(FlowLayout(FlowLayout.RIGHT, JBUI.scale(6), 0)).apply {
                 add(autoNamespaceCheckBox)
                 add(appendOutputCheckBox)
                 add(executeButton)
@@ -251,6 +290,62 @@ class KubectlConsolePanel(private val project: Project) : JPanel(BorderLayout())
             text = "# Kubernetes Remote SSH Kubectl Console\n# Type a kubectl command above and press Enter or click Execute.\n"
         }
         fullOutputBuffer.append(consoleTextArea.text)
+
+        consoleTextArea.addMouseListener(object : MouseAdapter() {
+            override fun mousePressed(e: MouseEvent) {
+                showConsolePopupMenu(e)
+            }
+
+            override fun mouseReleased(e: MouseEvent) {
+                showConsolePopupMenu(e)
+            }
+
+            private fun showConsolePopupMenu(e: MouseEvent) {
+                if (!e.isPopupTrigger) return
+                val menu = JPopupMenu()
+                val selected = consoleTextArea.selectedText
+                if (!selected.isNullOrBlank()) {
+                    menu.add(JMenuItem("Copy Selection").apply {
+                        icon = AllIcons.Actions.Copy
+                        addActionListener {
+                            Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(selected), null)
+                            statusTextLabel.text = "Copied selection to clipboard"
+                        }
+                    })
+                    val trimmed = selected.trim()
+                    if (trimmed.isNotBlank() && !trimmed.contains('\n')) {
+                        menu.add(JMenuItem("Execute Selected Text as Command").apply {
+                            icon = AllIcons.Actions.Execute
+                            addActionListener {
+                                val cleanCmd = if (trimmed.startsWith("kubectl ")) trimmed.removePrefix("kubectl ").trim() else trimmed
+                                executeCommand(cleanCmd)
+                            }
+                        })
+                    }
+                    menu.addSeparator()
+                }
+
+                menu.add(JMenuItem("Copy All Output").apply {
+                    icon = AllIcons.Actions.Copy
+                    addActionListener { copyConsoleOutput() }
+                })
+                menu.add(JMenuItem("Select All").apply {
+                    icon = AllIcons.Actions.Selectall
+                    addActionListener { consoleTextArea.selectAll() }
+                })
+                menu.addSeparator()
+                menu.add(JMenuItem("Find in Output...").apply {
+                    icon = AllIcons.Actions.Find
+                    addActionListener { searchField.textEditor.requestFocusInWindow() }
+                })
+                menu.add(JMenuItem("Clear Console").apply {
+                    icon = AllIcons.Actions.GC
+                    addActionListener { clearConsole() }
+                })
+
+                menu.show(e.component, e.x, e.y)
+            }
+        })
 
         val scrollPane = JBScrollPane(consoleTextArea).apply {
             border = JBUI.Borders.empty()

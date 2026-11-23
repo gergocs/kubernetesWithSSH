@@ -18,8 +18,7 @@ dependencies {
         intellijIdea("2026.2.4")
         testFramework(TestFrameworkType.Platform)
 
-        // Add plugin dependencies for compilation here, for example:
-        // bundledPlugin("com.intellij.java")
+        bundledPlugin("org.jetbrains.plugins.terminal")
     }
 }
 

@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cluster-metrics-agent
+  namespace: demo-monitoring
+  labels:
+    app: metrics-agent
+    app.kubernetes.io/part-of: kubernetes-ssh-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: metrics-agent
+  template:
+    metadata:
+      labels:
+        app: metrics-agent
+    spec:
+      containers:
+        - name: agent
+          image: alpine:3.20
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -c
+            - |
+              echo "Starting cluster metrics agent in demo-monitoring namespace...";
+              while true; do
+                mem=$(free -m 2>/dev/null | awk 'NR==2{printf "Memory Usage: %s/%sMB (%.2f%%)", $3,$2,$3*100/$2 }');
+                echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] [METRICS] $mem";
+                sleep 10;
+              done
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+            limits:
+              cpu: 50m
+              memory: 64Mi

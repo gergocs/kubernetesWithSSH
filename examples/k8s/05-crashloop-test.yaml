@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: crashloop-demo-pod
+  namespace: demo-app
+  labels:
+    app: crashloop-test
+    app.kubernetes.io/part-of: kubernetes-ssh-demo
+spec:
+  restartPolicy: Always
+  containers:
+    - name: crashing-app
+      image: busybox:1.36
+      command:
+        - /bin/sh
+        - -c
+        - |
+          echo "Crashing container initialized at $(date -u)";
+          echo "Simulating unhandled runtime error: Database connection refused!";
+          sleep 3;
+          exit 1;

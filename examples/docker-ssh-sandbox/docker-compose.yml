@@ -1,0 +1,17 @@
+services:
+  ssh-k8s-sandbox:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: k8s-ssh-test-sandbox
+    restart: unless-stopped
+    ports:
+      - "2222:22"
+    volumes:
+      # Mount your local kubeconfig so kubectl inside the container can interact with your cluster
+      - ~/.kube:/home/k8suser/.kube:ro
+      - ~/.kube:/root/.kube:ro
+      # Mount Docker socket so docker commands executed over SSH can inspect local images
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - KUBECONFIG=/home/k8suser/.kube/config
